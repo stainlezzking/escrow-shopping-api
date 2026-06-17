@@ -3,8 +3,8 @@ services:
     image: postgres:16
 
     environment:
-      POSTGRES_USER: appuser
-      POSTGRES_PASSWORD: apppassword
+      POSTGRES_USER: escrova
+      POSTGRES_PASSWORD: escrova_password
       POSTGRES_DB: appdb
 
     ports:
