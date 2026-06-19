@@ -34,4 +34,38 @@ describe('ZodValidationPipe', () => {
       pipe.transform({ email: 'invalid-email' }, { type: 'body' }),
     ).toThrow(BadRequestException);
   });
+
+  it('formats zod validation issues without raw internals or submitted values', () => {
+    const pipe = new ZodValidationPipe(
+      z.object({
+        buyer: z.object({
+          email: z.string().email(),
+        }),
+      }),
+    );
+
+    try {
+      pipe.transform({ buyer: { email: 'not-an-email' } }, { type: 'body' });
+      throw new Error('Expected validation to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(BadRequestException);
+
+      const response = (error as BadRequestException).getResponse();
+
+      expect(response).toEqual({
+        message: 'Validation failed',
+        error: {
+          code: 'VALIDATION_ERROR',
+          details: [
+            expect.objectContaining({
+              path: 'buyer.email',
+              message: expect.any(String),
+              code: expect.any(String),
+            }),
+          ],
+        },
+      });
+      expect(JSON.stringify(response)).not.toContain('not-an-email');
+    }
+  });
 });

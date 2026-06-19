@@ -5,11 +5,7 @@ import {
   PipeTransform,
 } from '@nestjs/common';
 import { z } from 'zod';
-
-export interface ZodValidationIssue {
-  path: string;
-  message: string;
-}
+import { formatZodIssues } from '../utils/zod-error-formatter';
 
 /**
  * Validates incoming request values with a provided Zod schema.
@@ -47,11 +43,10 @@ export class ZodValidationPipe<
 
     throw new BadRequestException({
       message: 'Validation failed',
-      error: 'VALIDATION_ERROR',
-      details: result.error.issues.map((issue) => ({
-        path: issue.path.join('.'),
-        message: issue.message,
-      })),
+      error: {
+        code: 'VALIDATION_ERROR',
+        details: formatZodIssues(result.error.issues),
+      },
     });
   }
 }

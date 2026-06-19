@@ -1,6 +1,6 @@
 import { of, lastValueFrom } from 'rxjs';
 import { ApiResponseInterceptor } from './api-response.interceptor';
-import { apiResponse } from '../responses/api-response';
+import { apiResponse, paginatedResponse } from '../responses/api-response';
 import { describe, it, expect } from '@jest/globals';
 
 describe('ApiResponseInterceptor', () => {
@@ -37,6 +37,34 @@ describe('ApiResponseInterceptor', () => {
       data: [{ id: 'one' }],
       message: 'Records retrieved successfully',
       meta: { page: 1 },
+    });
+  });
+
+  it('preserves paginated helper metadata', async () => {
+    const result = await lastValueFrom(
+      interceptor.intercept({} as never, {
+        handle: () =>
+          of(
+            paginatedResponse([{ id: 'one' }], {
+              page: 1,
+              limit: 20,
+              total: 1,
+              totalPages: 1,
+            }),
+          ),
+      }),
+    );
+
+    expect(result).toEqual({
+      success: true,
+      data: [{ id: 'one' }],
+      message: 'Records retrieved successfully',
+      meta: {
+        page: 1,
+        limit: 20,
+        total: 1,
+        totalPages: 1,
+      },
     });
   });
 });

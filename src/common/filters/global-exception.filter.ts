@@ -6,15 +6,10 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { Response } from 'express';
-
-interface ErrorPayload {
-  success: false;
-  message: string;
-  error: {
-    code: string;
-    details?: unknown;
-  };
-}
+import {
+  StandardApiErrorResponse,
+  createApiErrorResponse,
+} from '../responses/api-response';
 
 /**
  * Converts framework, validation, and unexpected errors into safe API errors.
@@ -38,39 +33,37 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     response.status(status).json(this.toPayload(exception, status));
   }
 
-  private toPayload(exception: unknown, status: number): ErrorPayload {
+  private toPayload(
+    exception: unknown,
+    status: number,
+  ): StandardApiErrorResponse {
     if (exception instanceof HttpException) {
       const body = exception.getResponse();
 
       if (typeof body === 'object' && body !== null) {
         const responseBody = body as Record<string, unknown>;
 
-        return {
-          success: false,
+        if (this.isStandardErrorResponse(responseBody)) {
+          return responseBody;
+        }
+
+        return createApiErrorResponse({
           message: this.safeMessage(responseBody.message),
-          error: {
-            code: this.safeCode(responseBody.error, status),
-            details: responseBody.details,
-          },
-        };
+          code: this.safeCode(responseBody.error, status),
+          details: this.safeDetails(responseBody),
+        });
       }
 
-      return {
-        success: false,
+      return createApiErrorResponse({
         message: exception.message,
-        error: {
-          code: this.codeFromStatus(status),
-        },
-      };
+        code: this.codeFromStatus(status),
+      });
     }
 
-    return {
-      success: false,
+    return createApiErrorResponse({
       message: 'An unexpected error occurred',
-      error: {
-        code: 'INTERNAL_SERVER_ERROR',
-      },
-    };
+      code: 'INTERNAL_SERVER_ERROR',
+    });
   }
 
   private safeMessage(message: unknown): string {
@@ -86,6 +79,10 @@ export class GlobalExceptionFilter implements ExceptionFilter {
   }
 
   private safeCode(code: unknown, status: number): string {
+    if (typeof code === 'object' && code !== null && 'code' in code) {
+      return this.safeCode(code.code, status);
+    }
+
     if (typeof code === 'string' && code.trim().length > 0) {
       return code
         .replace(/([a-z])([A-Z])/g, '$1_$2')
@@ -96,9 +93,41 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     return this.codeFromStatus(status);
   }
 
+  private safeDetails(responseBody: Record<string, unknown>): unknown {
+    if ('details' in responseBody) {
+      return responseBody.details;
+    }
+
+    const error = responseBody.error;
+
+    if (typeof error === 'object' && error !== null && 'details' in error) {
+      return error.details;
+    }
+
+    return undefined;
+  }
+
   private codeFromStatus(status: number): string {
     const reason = HttpStatus[status] as string | undefined;
 
     return reason ?? 'INTERNAL_SERVER_ERROR';
+  }
+
+  private isStandardErrorResponse(
+    body: unknown,
+  ): body is StandardApiErrorResponse {
+    if (typeof body !== 'object' || body === null) {
+      return false;
+    }
+
+    const candidate = body as Record<string, unknown>;
+
+    return (
+      candidate.success === false &&
+      typeof candidate.message === 'string' &&
+      typeof candidate.error === 'object' &&
+      candidate.error !== null &&
+      'code' in candidate.error
+    );
   }
 }
