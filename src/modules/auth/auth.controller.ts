@@ -21,6 +21,8 @@ import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { AuthResponseDto, PublicUserDto } from './dto/auth-response.dto';
+import { GoogleAuthDto, GoogleAuthSchema } from './dto/google-auth.dto';
+import type { GoogleAuthInput } from './dto/google-auth.dto';
 import { LoginDto, LoginSchema } from './dto/login.dto';
 import type { LoginInput } from './dto/login.dto';
 import { RegisterDto, RegisterSchema } from './dto/register.dto';
@@ -69,6 +71,24 @@ export class AuthController {
   @ApiUnauthorizedResponse({ description: 'Invalid email or password' })
   login(@Body() dto: LoginInput): Promise<AuthResponseDto> {
     return this.authService.login(dto);
+  }
+
+  /**
+   * Signs up or signs in a user with Google.
+   *
+   * @param dto - Validated Google ID token payload.
+   * @returns Auth payload with access token and public user details.
+   */
+  @Post('google')
+  @UsePipes(new ZodValidationPipe(GoogleAuthSchema))
+  @ApiOperation({ summary: 'Signup or signin with Google' })
+  @ApiBody({ type: GoogleAuthDto })
+  @ApiOkResponse({ type: AuthResponseDto })
+  @ApiUnauthorizedResponse({
+    description: 'Invalid Google authentication token',
+  })
+  google(@Body() dto: GoogleAuthInput): Promise<AuthResponseDto> {
+    return this.authService.authenticateWithGoogle(dto);
   }
 
   /**

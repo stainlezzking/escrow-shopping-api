@@ -5,6 +5,7 @@ import type { SignOptions } from 'jsonwebtoken';
 import { UsersModule } from '../users/users.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { GoogleIdentityVerifierService } from './google-identity-verifier.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { PasswordHasherService } from './password-hasher.service';
@@ -37,7 +38,13 @@ interface AuthConfig {
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, PasswordHasherService, JwtAuthGuard, RolesGuard],
+  providers: [
+    AuthService,
+    GoogleIdentityVerifierService,
+    PasswordHasherService,
+    JwtAuthGuard,
+    RolesGuard,
+  ],
   exports: [AuthService, JwtAuthGuard, RolesGuard],
 })
 export class AuthModule {}

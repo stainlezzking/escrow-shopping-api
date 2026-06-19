@@ -8,6 +8,7 @@ describe('validateEnv', () => {
     DATABASE_URL:
       'postgresql://escrova:escrova_password@localhost:5432/escrova_db?schema=public',
     JWT_ACCESS_TOKEN_SECRET: 'test_access_token_secret_with_32_chars',
+    GOOGLE_CLIENT_ID: '',
   };
 
   it('returns safe non-secret defaults when database values are provided', () => {
@@ -27,6 +28,7 @@ describe('validateEnv', () => {
         'postgresql://escrova:escrova_password@localhost:5432/escrova_db?schema=public',
       JWT_ACCESS_TOKEN_SECRET: 'test_access_token_secret_with_32_chars',
       JWT_ACCESS_TOKEN_EXPIRES_IN: '15m',
+      GOOGLE_CLIENT_ID: '',
     });
   });
 
@@ -47,6 +49,7 @@ describe('validateEnv', () => {
         DATABASE_URL: 'postgresql://user:pass@localhost:5432/db?schema=public',
         JWT_ACCESS_TOKEN_SECRET: 'test_access_token_secret_with_32_chars',
         JWT_ACCESS_TOKEN_EXPIRES_IN: '30m',
+        GOOGLE_CLIENT_ID: 'google-client.apps.googleusercontent.com',
       }),
     ).toEqual({
       NODE_ENV: 'test',
@@ -63,6 +66,7 @@ describe('validateEnv', () => {
       DATABASE_URL: 'postgresql://user:pass@localhost:5432/db?schema=public',
       JWT_ACCESS_TOKEN_SECRET: 'test_access_token_secret_with_32_chars',
       JWT_ACCESS_TOKEN_EXPIRES_IN: '30m',
+      GOOGLE_CLIENT_ID: 'google-client.apps.googleusercontent.com',
     });
   });
 

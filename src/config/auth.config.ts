@@ -6,4 +6,5 @@ import { registerAs } from '@nestjs/config';
 export default registerAs('auth', () => ({
   jwtAccessTokenSecret: process.env.JWT_ACCESS_TOKEN_SECRET,
   jwtAccessTokenExpiresIn: process.env.JWT_ACCESS_TOKEN_EXPIRES_IN ?? '15m',
+  googleClientId: process.env.GOOGLE_CLIENT_ID ?? '',
 }));

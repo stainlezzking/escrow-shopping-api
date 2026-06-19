@@ -29,6 +29,7 @@ export const envSchema = z.object({
   DATABASE_URL: z.string().url(),
   JWT_ACCESS_TOKEN_SECRET: z.string().min(32),
   JWT_ACCESS_TOKEN_EXPIRES_IN: z.string().min(1).default('15m'),
+  GOOGLE_CLIENT_ID: z.string().default(''),
 });
 
 export type EnvVariables = z.infer<typeof envSchema>;

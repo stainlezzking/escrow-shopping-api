@@ -3,12 +3,17 @@
 /* eslint-disable @typescript-eslint/no-unsafe-return */
 /* eslint-disable @typescript-eslint/require-await */
 /* eslint-disable @typescript-eslint/unbound-method */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { UserRole, WalletOwnerType } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { PasswordHasherService } from './password-hasher.service';
 import { AuthService } from './auth.service';
+import {
+  GoogleIdentity,
+  GoogleIdentityVerifierService,
+} from './google-identity-verifier.service';
 
 describe('AuthService', () => {
   const now = new Date('2026-06-19T09:00:00.000Z');
@@ -40,12 +45,17 @@ describe('AuthService', () => {
   let prisma: jest.Mocked<PrismaService>;
   let passwordHasher: jest.Mocked<PasswordHasherService>;
   let jwtService: jest.Mocked<JwtService>;
+  let googleVerifier: jest.Mocked<GoogleIdentityVerifierService>;
   let service: AuthService;
 
   beforeEach(() => {
     const tx = {
       user: {
         create: jest.fn().mockResolvedValue(userRecord),
+        update: jest.fn().mockResolvedValue({
+          ...userRecord,
+          googleId: 'google_subject_one',
+        }),
       },
       buyerProfile: {
         create: jest.fn().mockResolvedValue(userRecord.buyerProfile),
@@ -68,11 +78,25 @@ describe('AuthService', () => {
       verify: jest.fn().mockResolvedValue(true),
     };
 
+    googleVerifier = {
+      verifyIdToken: jest.fn().mockResolvedValue({
+        googleId: 'google_subject_one',
+        email: 'buyer@example.com',
+        fullName: 'Ada Buyer',
+        emailVerified: true,
+      } satisfies GoogleIdentity),
+    } as unknown as jest.Mocked<GoogleIdentityVerifierService>;
+
     jwtService = {
       signAsync: jest.fn().mockResolvedValue('jwt_access_token'),
     } as unknown as jest.Mocked<JwtService>;
 
-    service = new AuthService(prisma, passwordHasher, jwtService);
+    service = new AuthService(
+      prisma,
+      passwordHasher,
+      jwtService,
+      googleVerifier,
+    );
   });
 
   it('registers a buyer with a hashed password, buyer profile, and buyer wallet', async () => {
@@ -149,6 +173,60 @@ describe('AuthService', () => {
         email: 'buyer@example.com',
         password: 'wrong-password',
       }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('creates a buyer account from a verified google identity', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+
+    const result = await service.authenticateWithGoogle({
+      idToken: 'google_id_token',
+    });
+
+    expect(googleVerifier.verifyIdToken).toHaveBeenCalledWith(
+      'google_id_token',
+    );
+    expect(passwordHasher.hash).toHaveBeenCalledWith(expect.any(String));
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(result.accessToken).toBe('jwt_access_token');
+    expect(result.user.email).toBe('buyer@example.com');
+    expect(JSON.stringify(result)).not.toContain('google_id_token');
+  });
+
+  it('links a verified google identity to an existing email account', async () => {
+    prisma.user.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ ...userRecord, googleId: null });
+    prisma.user.update.mockResolvedValue({
+      ...userRecord,
+      googleId: 'google_subject_one',
+    });
+
+    const result = await service.authenticateWithGoogle({
+      idToken: 'google_id_token',
+    });
+
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'user_one' },
+      data: {
+        googleId: 'google_subject_one',
+        lastLoginAt: expect.any(Date),
+      },
+      include: expect.any(Object),
+    });
+    expect(result.user.id).toBe('user_one');
+  });
+
+  it('rejects unverified google emails', async () => {
+    googleVerifier.verifyIdToken.mockResolvedValue({
+      googleId: 'google_subject_one',
+      email: 'buyer@example.com',
+      fullName: 'Ada Buyer',
+      emailVerified: false,
+    });
+
+    await expect(
+      service.authenticateWithGoogle({ idToken: 'google_id_token' }),
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 });
