@@ -1,0 +1,734 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  BUYER
+  SELLER
+  ADMIN
+}
+
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum KycStatus {
+  NOT_SUBMITTED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum StoreStatus {
+  PENDING_KYC
+  ACTIVE
+  SUSPENDED
+  HIDDEN
+}
+
+enum ProductStatus {
+  DRAFT
+  LIVE
+  HIDDEN
+  OUT_OF_STOCK
+  SUSPENDED
+}
+
+enum VisibilityStatus {
+  ACTIVE
+  HIDDEN
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  PARTIALLY_FULFILLED
+  COMPLETED
+  CANCELLED
+  REFUNDED
+}
+
+enum OrderItemStatus {
+  PENDING_PAYMENT
+  FUNDED
+  AWAITING_DISPATCH
+  DISPATCHED
+  DELIVERED
+  CONFIRMED
+  DISPUTED
+  RELEASED
+  REFUNDED
+  CANCELLED
+}
+
+enum EscrowStatus {
+  PENDING
+  FUNDED
+  HELD
+  DISPUTED
+  RELEASED
+  REFUNDED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  INITIATED
+  PENDING
+  SUCCESS
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+
+enum PaymentProvider {
+  PAYSTACK
+  FLUTTERWAVE
+  MONNIFY
+  BANK_TRANSFER
+  MANUAL
+}
+
+enum WalletOwnerType {
+  BUYER
+  SELLER
+  PLATFORM
+}
+
+enum WalletStatus {
+  ACTIVE
+  FROZEN
+  CLOSED
+}
+
+enum LedgerDirection {
+  CREDIT
+  DEBIT
+}
+
+enum LedgerEntryType {
+  BUYER_PAYMENT
+  ESCROW_HOLD
+  ESCROW_RELEASE
+  REFUND
+  PLATFORM_COMMISSION
+  PAYOUT
+  PAYOUT_REVERSAL
+  MANUAL_ADJUSTMENT
+}
+
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  AWAITING_BUYER_RETURN
+  RETURN_IN_TRANSIT
+  RESOLVED_BUYER_WON
+  RESOLVED_SELLER_WON
+  CANCELLED
+}
+
+enum DocumentType {
+  NIN
+  BVN
+  DRIVERS_LICENSE
+  VOTERS_CARD
+  CAC
+}
+
+enum PayoutBatchStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum PayoutRecordStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  FAILED
+  CANCELLED
+}
+
+model User {
+  id               String        @id @default(uuid())
+  email            String        @unique
+  passwordHash     String
+  role             UserRole      @default(BUYER)
+  status           AccountStatus @default(ACTIVE)
+  phoneNumber      String?
+  refreshTokenHash String?
+  lastLoginAt      DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  buyerProfile      BuyerProfile?
+  sellerProfiles    SellerProfile[]
+  raisedDisputes    Dispute[]          @relation("DisputeRaisedBy")
+  resolvedDisputes  Dispute[]          @relation("DisputeResolvedBy")
+  reviewedDocuments KycDocument[]      @relation("KycReviewedBy")
+  generatedPayouts  PayoutBatch[]      @relation("PayoutBatchGeneratedBy")
+  updatedSettings   PlatformSetting[]  @relation("PlatformSettingUpdatedBy")
+  adminActivityLogs AdminActivityLog[] @relation("AdminActivityActor")
+
+  @@index([phoneNumber])
+  @@index([role])
+  @@index([status])
+}
+
+model BuyerProfile {
+  id          String        @id @default(uuid())
+  userId      String        @unique
+  fullName    String
+  phoneNumber String?
+  status      AccountStatus @default(ACTIVE)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  user      User                @relation(fields: [userId], references: [id], onDelete: Restrict)
+  wallet    Wallet?
+  addresses BuyerAddress[]
+  cartItems CartItem[]
+  orders    Order[]
+  payments  Payment[]
+  escrows   EscrowTransaction[]
+  disputes  Dispute[]
+
+  @@index([userId])
+  @@index([phoneNumber])
+  @@index([status])
+}
+
+model BuyerAddress {
+  id             String   @id @default(uuid())
+  buyerProfileId String
+  contactName    String
+  phoneNumber    String?
+  state          String
+  city           String?
+  streetAddress  String
+  deliveryNotes  String?
+  isDefault      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  buyerProfile BuyerProfile @relation(fields: [buyerProfileId], references: [id], onDelete: Restrict)
+
+  @@index([buyerProfileId])
+  @@index([state])
+  @@index([isDefault])
+}
+
+model BusinessCategory {
+  id          String           @id @default(uuid())
+  name        String           @unique
+  description String?
+  status      VisibilityStatus @default(ACTIVE)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  sellerProfiles SellerProfile[]
+
+  @@index([status])
+}
+
+model SellerProfile {
+  id                 String      @id @default(uuid())
+  userId             String
+  businessCategoryId String?
+  username           String?
+  businessName       String
+  storeHandle        String      @unique
+  storeUrl           String?     @unique
+  baseLocation       String?
+  bankName           String?
+  accountNumber      String?
+  accountName        String?
+  kycStatus          KycStatus   @default(NOT_SUBMITTED)
+  status             StoreStatus @default(PENDING_KYC)
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  user             User                @relation(fields: [userId], references: [id], onDelete: Restrict)
+  businessCategory BusinessCategory?   @relation(fields: [businessCategoryId], references: [id], onDelete: Restrict)
+  wallet           Wallet?
+  products         Product[]
+  kycDocuments     KycDocument[]
+  orderItems       OrderItem[]
+  escrows          EscrowTransaction[]
+  dispatchEvidence DispatchEvidence[]
+  disputes         Dispute[]
+  payoutRecords    PayoutRecord[]
+
+  @@index([userId])
+  @@index([businessCategoryId])
+  @@index([kycStatus])
+  @@index([status])
+}
+
+model KycDocument {
+  id                String       @id @default(uuid())
+  sellerProfileId   String
+  documentType      DocumentType
+  documentNumber    String
+  documentImageUrl  String
+  storageKey        String?
+  status            KycStatus    @default(PENDING)
+  rejectionReason   String?
+  reviewedByAdminId String?
+  reviewedAt        DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  sellerProfile SellerProfile @relation(fields: [sellerProfileId], references: [id], onDelete: Restrict)
+  reviewedBy    User?         @relation("KycReviewedBy", fields: [reviewedByAdminId], references: [id], onDelete: Restrict)
+
+  @@index([sellerProfileId])
+  @@index([documentType])
+  @@index([status])
+  @@index([reviewedByAdminId])
+}
+
+model PlatformEntity {
+  id                     String    @id @default(uuid())
+  organizationName       String
+  corporateBankName      String?
+  corporateAccountNumber String?
+  corporateAccountName   String?
+  lastAuditAt            DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  wallet Wallet?
+}
+
+model Wallet {
+  id                       String          @id @default(uuid())
+  ownerType                WalletOwnerType
+  buyerProfileId           String?         @unique
+  sellerProfileId          String?         @unique
+  platformEntityId         String?         @unique
+  availableBalanceKobo     BigInt          @default(0)
+  escrowBalanceKobo        BigInt          @default(0)
+  pendingPayoutBalanceKobo BigInt          @default(0)
+  payoutPinHash            String?
+  status                   WalletStatus    @default(ACTIVE)
+  createdAt                DateTime        @default(now())
+  updatedAt                DateTime        @updatedAt
+
+  buyerProfile   BuyerProfile?       @relation(fields: [buyerProfileId], references: [id], onDelete: Restrict)
+  sellerProfile  SellerProfile?      @relation(fields: [sellerProfileId], references: [id], onDelete: Restrict)
+  platformEntity PlatformEntity?     @relation(fields: [platformEntityId], references: [id], onDelete: Restrict)
+  ledgerEntries  WalletLedgerEntry[]
+  payoutRecords  PayoutRecord[]
+
+  @@index([ownerType])
+  @@index([status])
+}
+
+model WalletLedgerEntry {
+  id                    String          @id @default(uuid())
+  walletId              String
+  direction             LedgerDirection
+  entryType             LedgerEntryType
+  amountKobo            BigInt
+  balanceBeforeKobo     BigInt
+  balanceAfterKobo      BigInt
+  reference             String
+  idempotencyKey        String          @unique
+  relatedOrderId        String?
+  relatedOrderItemId    String?
+  relatedEscrowId       String?
+  relatedPaymentId      String?
+  relatedPayoutRecordId String?
+  narration             String?
+  metadata              Json?
+  createdAt             DateTime        @default(now())
+
+  wallet              Wallet             @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  relatedOrder        Order?             @relation(fields: [relatedOrderId], references: [id], onDelete: Restrict)
+  relatedOrderItem    OrderItem?         @relation(fields: [relatedOrderItemId], references: [id], onDelete: Restrict)
+  relatedEscrow       EscrowTransaction? @relation(fields: [relatedEscrowId], references: [id], onDelete: Restrict)
+  relatedPayment      Payment?           @relation(fields: [relatedPaymentId], references: [id], onDelete: Restrict)
+  relatedPayoutRecord PayoutRecord?      @relation(fields: [relatedPayoutRecordId], references: [id], onDelete: Restrict)
+
+  @@index([walletId])
+  @@index([direction])
+  @@index([entryType])
+  @@index([reference])
+  @@index([relatedOrderId])
+  @@index([relatedOrderItemId])
+  @@index([relatedEscrowId])
+  @@index([relatedPaymentId])
+  @@index([relatedPayoutRecordId])
+  @@index([createdAt])
+}
+
+model Category {
+  id               String           @id @default(uuid())
+  name             String
+  slug             String           @unique
+  parentCategoryId String?
+  level            Int              @default(1)
+  description      String?
+  status           VisibilityStatus @default(ACTIVE)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  parentCategory  Category?         @relation("CategoryHierarchy", fields: [parentCategoryId], references: [id], onDelete: Restrict)
+  childCategories Category[]        @relation("CategoryHierarchy")
+  products        ProductCategory[]
+
+  @@index([parentCategoryId])
+  @@index([level])
+  @@index([status])
+}
+
+model Product {
+  id              String        @id @default(uuid())
+  sellerProfileId String
+  title           String
+  slug            String
+  description     String?
+  priceKobo       BigInt
+  stockQuantity   Int           @default(0)
+  status          ProductStatus @default(DRAFT)
+  viewCount       Int           @default(0)
+  isActive        Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  deletedAt       DateTime?
+
+  sellerProfile SellerProfile     @relation(fields: [sellerProfileId], references: [id], onDelete: Restrict)
+  images        ProductImage[]
+  categories    ProductCategory[]
+  cartItems     CartItem[]
+  orderItems    OrderItem[]
+
+  @@unique([sellerProfileId, slug])
+  @@index([sellerProfileId])
+  @@index([slug])
+  @@index([status])
+  @@index([isActive])
+  @@index([createdAt])
+  @@index([deletedAt])
+}
+
+model ProductImage {
+  id         String   @id @default(uuid())
+  productId  String
+  imageUrl   String
+  storageKey String?
+  isPrimary  Boolean  @default(false)
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([productId])
+  @@index([isPrimary])
+}
+
+model ProductCategory {
+  id         String   @id @default(uuid())
+  productId  String
+  categoryId String
+  createdAt  DateTime @default(now())
+
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  @@unique([productId, categoryId])
+  @@index([productId])
+  @@index([categoryId])
+}
+
+model CartItem {
+  id                 String   @id @default(uuid())
+  buyerProfileId     String
+  productId          String
+  quantity           Int
+  selectedAttributes Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  buyerProfile BuyerProfile @relation(fields: [buyerProfileId], references: [id], onDelete: Restrict)
+  product      Product      @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([buyerProfileId, productId])
+  @@index([buyerProfileId])
+  @@index([productId])
+}
+
+model Order {
+  id                     String      @id @default(uuid())
+  buyerProfileId         String
+  orderReference         String      @unique
+  status                 OrderStatus @default(PENDING_PAYMENT)
+  totalProductAmountKobo BigInt
+  totalShippingFeeKobo   BigInt
+  totalServiceFeeKobo    BigInt
+  totalOrderAmountKobo   BigInt
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+  cancelledAt            DateTime?
+  completedAt            DateTime?
+
+  buyerProfile  BuyerProfile        @relation(fields: [buyerProfileId], references: [id], onDelete: Restrict)
+  items         OrderItem[]
+  payments      Payment[]
+  ledgerEntries WalletLedgerEntry[]
+
+  @@index([buyerProfileId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model OrderItem {
+  id                      String          @id @default(uuid())
+  orderId                 String
+  productId               String
+  sellerProfileId         String
+  quantity                Int
+  unitPriceAtCheckoutKobo BigInt
+  productAmountKobo       BigInt
+  shippingFeeKobo         BigInt
+  serviceFeeKobo          BigInt
+  netEscrowAmountKobo     BigInt
+  status                  OrderItemStatus @default(PENDING_PAYMENT)
+  deliveryHandledBy       String?
+  safetyTimerExpiresAt    DateTime?
+  dispatchedAt            DateTime?
+  deliveredAt             DateTime?
+  confirmedAt             DateTime?
+  releasedAt              DateTime?
+  refundedAt              DateTime?
+  cancelledAt             DateTime?
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
+
+  order            Order               @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  product          Product             @relation(fields: [productId], references: [id], onDelete: Restrict)
+  sellerProfile    SellerProfile       @relation(fields: [sellerProfileId], references: [id], onDelete: Restrict)
+  escrow           EscrowTransaction?
+  dispatchEvidence DispatchEvidence[]
+  disputes         Dispute[]
+  ledgerEntries    WalletLedgerEntry[]
+
+  @@index([orderId])
+  @@index([productId])
+  @@index([sellerProfileId])
+  @@index([status])
+  @@index([safetyTimerExpiresAt])
+  @@index([createdAt])
+}
+
+model Payment {
+  id                String          @id @default(uuid())
+  orderId           String
+  buyerProfileId    String
+  provider          PaymentProvider
+  providerReference String?         @unique
+  internalReference String          @unique
+  status            PaymentStatus   @default(INITIATED)
+  amountKobo        BigInt
+  currency          String          @default("NGN")
+  providerPayload   Json?
+  verifiedAt        DateTime?
+  failedAt          DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  order         Order               @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  buyerProfile  BuyerProfile        @relation(fields: [buyerProfileId], references: [id], onDelete: Restrict)
+  escrows       EscrowTransaction[]
+  ledgerEntries WalletLedgerEntry[]
+
+  @@index([orderId])
+  @@index([buyerProfileId])
+  @@index([status])
+  @@index([provider])
+  @@index([createdAt])
+}
+
+model EscrowTransaction {
+  id                  String       @id @default(uuid())
+  orderItemId         String       @unique
+  sellerProfileId     String
+  buyerProfileId      String
+  paymentId           String?
+  escrowReference     String       @unique
+  status              EscrowStatus @default(PENDING)
+  grossAmountKobo     BigInt
+  sellerNetAmountKobo BigInt
+  platformFeeKobo     BigInt
+  shippingFeeKobo     BigInt
+  heldAt              DateTime?
+  disputedAt          DateTime?
+  releasedAt          DateTime?
+  refundedAt          DateTime?
+  cancelledAt         DateTime?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  orderItem     OrderItem           @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  sellerProfile SellerProfile       @relation(fields: [sellerProfileId], references: [id], onDelete: Restrict)
+  buyerProfile  BuyerProfile        @relation(fields: [buyerProfileId], references: [id], onDelete: Restrict)
+  payment       Payment?            @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  ledgerEntries WalletLedgerEntry[]
+
+  @@index([sellerProfileId])
+  @@index([buyerProfileId])
+  @@index([paymentId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model DispatchEvidence {
+  id                String   @id @default(uuid())
+  orderItemId       String
+  sellerProfileId   String
+  evidenceType      String?
+  imageUrl          String?
+  storageKey        String?
+  trackingReference String?
+  courierName       String?
+  notes             String?
+  uploadedAt        DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  orderItem     OrderItem     @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  sellerProfile SellerProfile @relation(fields: [sellerProfileId], references: [id], onDelete: Restrict)
+
+  @@index([orderItemId])
+  @@index([sellerProfileId])
+  @@index([trackingReference])
+  @@index([uploadedAt])
+}
+
+model Dispute {
+  id                    String        @id @default(uuid())
+  orderItemId           String
+  raisedByUserId        String
+  buyerProfileId        String
+  sellerProfileId       String
+  status                DisputeStatus @default(OPEN)
+  reason                String
+  evidenceImageUrl      String?
+  evidenceStorageKey    String?
+  returnWaybillImageUrl String?
+  returnStorageKey      String?
+  returnStatus          String?
+  adminResolutionReason String?
+  resolvedByAdminId     String?
+  resolvedAt            DateTime?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  orderItem     OrderItem     @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  raisedBy      User          @relation("DisputeRaisedBy", fields: [raisedByUserId], references: [id], onDelete: Restrict)
+  buyerProfile  BuyerProfile  @relation(fields: [buyerProfileId], references: [id], onDelete: Restrict)
+  sellerProfile SellerProfile @relation(fields: [sellerProfileId], references: [id], onDelete: Restrict)
+  resolvedBy    User?         @relation("DisputeResolvedBy", fields: [resolvedByAdminId], references: [id], onDelete: Restrict)
+
+  @@index([orderItemId])
+  @@index([raisedByUserId])
+  @@index([buyerProfileId])
+  @@index([sellerProfileId])
+  @@index([status])
+  @@index([resolvedByAdminId])
+  @@index([createdAt])
+}
+
+model PayoutBatch {
+  id                 String            @id @default(uuid())
+  batchReference     String            @unique
+  status             PayoutBatchStatus @default(PENDING)
+  totalAmountKobo    BigInt
+  sellerCount        Int
+  generatedByAdminId String?
+  generatedAt        DateTime          @default(now())
+  settledAt          DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  records          PayoutRecord[]
+  generatedByAdmin User?          @relation("PayoutBatchGeneratedBy", fields: [generatedByAdminId], references: [id], onDelete: Restrict)
+
+  @@index([status])
+  @@index([generatedAt])
+  @@index([generatedByAdminId])
+}
+
+model PayoutRecord {
+  id                    String             @id @default(uuid())
+  batchId               String
+  sellerProfileId       String
+  sellerWalletId        String
+  payoutReference       String             @unique
+  amountKobo            BigInt
+  bankNameSnapshot      String
+  accountNumberSnapshot String
+  accountNameSnapshot   String
+  status                PayoutRecordStatus @default(PENDING)
+  failureReason         String?
+  processedAt           DateTime?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  batch         PayoutBatch         @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  sellerProfile SellerProfile       @relation(fields: [sellerProfileId], references: [id], onDelete: Restrict)
+  sellerWallet  Wallet              @relation(fields: [sellerWalletId], references: [id], onDelete: Restrict)
+  ledgerEntries WalletLedgerEntry[]
+
+  @@index([batchId])
+  @@index([sellerProfileId])
+  @@index([sellerWalletId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model PlatformSetting {
+  id               String   @id @default(uuid())
+  settingKey       String   @unique
+  settingValue     String
+  settingsGroup    String
+  valueType        String
+  description      String?
+  updatedByAdminId String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  updatedByAdmin User? @relation("PlatformSettingUpdatedBy", fields: [updatedByAdminId], references: [id], onDelete: Restrict)
+
+  @@index([settingsGroup])
+  @@index([updatedByAdminId])
+}
+
+model AdminActivityLog {
+  id          String   @id @default(uuid())
+  actorUserId String?
+  actorRole   String?
+  actionType  String
+  targetType  String
+  targetId    String?
+  reason      String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  actor User? @relation("AdminActivityActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([actorUserId])
+  @@index([actionType])
+  @@index([targetType])
+  @@index([targetId])
+  @@index([createdAt])
+}

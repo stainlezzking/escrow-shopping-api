@@ -5,7 +5,9 @@ import { GlobalExceptionFilter } from './common/filters/global-exception.filter'
 import { ApiResponseInterceptor } from './common/interceptors/api-response.interceptor';
 import { ZodValidationPipe } from './common/pipes/zod-validation.pipe';
 import appConfig from './config/app.config';
+import databaseConfig from './config/database.config';
 import { validateEnv } from './config/env.validation';
+import { PrismaModule } from './database/prisma.module';
 import { HealthModule } from './modules/health/health.module';
 
 /**
@@ -14,10 +16,12 @@ import { HealthModule } from './modules/health/health.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
+      envFilePath: '.env',
       isGlobal: true,
-      load: [appConfig],
+      load: [appConfig, databaseConfig],
       validate: validateEnv,
     }),
+    PrismaModule,
     HealthModule,
   ],
   providers: [

@@ -3,8 +3,9 @@ import { z } from 'zod';
 /**
  * Defines the environment variables required to start the Escrova API.
  *
- * Defaults are local-development safe and match the Docker PostgreSQL service
- * configured in this repository.
+ * Non-secret defaults are local-development safe. Database configuration is
+ * required from `.env` so startup fails fast when the runtime database is not
+ * configured.
  */
 export const envSchema = z.object({
   NODE_ENV: z
@@ -14,12 +15,11 @@ export const envSchema = z.object({
   API_PREFIX: z.string().min(1).default('api'),
   API_VERSION: z.string().min(1).default('v1'),
   SWAGGER_PATH: z.string().min(1).default('docs'),
-  DATABASE_URL: z
-    .string()
-    .url()
-    .default(
-      'postgresql://escrova:escrova_password@localhost:5432/appdb?schema=public',
-    ),
+  POSTGRES_USER: z.string().min(1),
+  POSTGRES_PASSWORD: z.string().min(1),
+  POSTGRES_DB: z.string().min(1),
+  POSTGRES_PORT: z.coerce.number().int().min(1).max(65535).default(5432),
+  DATABASE_URL: z.string().url(),
 });
 
 export type EnvVariables = z.infer<typeof envSchema>;
