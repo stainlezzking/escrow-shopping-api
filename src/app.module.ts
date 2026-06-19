@@ -1,12 +1,18 @@
-import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { Module, RequestMethod } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
+import { LoggerModule } from 'nestjs-pino';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { ApiResponseInterceptor } from './common/interceptors/api-response.interceptor';
 import { ZodValidationPipe } from './common/pipes/zod-validation.pipe';
 import appConfig from './config/app.config';
 import databaseConfig from './config/database.config';
 import { validateEnv } from './config/env.validation';
+import loggingConfig from './config/logging.config';
+import {
+  LoggingConfig,
+  buildPinoHttpOptions,
+} from './config/pino-http-options';
 import { PrismaModule } from './database/prisma.module';
 import { HealthModule } from './modules/health/health.module';
 
@@ -18,8 +24,18 @@ import { HealthModule } from './modules/health/health.module';
     ConfigModule.forRoot({
       envFilePath: '.env',
       isGlobal: true,
-      load: [appConfig, databaseConfig],
+      load: [appConfig, databaseConfig, loggingConfig],
       validate: validateEnv,
+    }),
+    LoggerModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => ({
+        pinoHttp: buildPinoHttpOptions(
+          configService.getOrThrow<LoggingConfig>('logging'),
+        ),
+        forRoutes: [{ path: '*path', method: RequestMethod.ALL }],
+      }),
     }),
     PrismaModule,
     HealthModule,

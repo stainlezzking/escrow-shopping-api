@@ -11,6 +11,13 @@ export const envSchema = z.object({
   NODE_ENV: z
     .enum(['development', 'test', 'production'])
     .default('development'),
+  LOG_LEVEL: z
+    .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
+    .default('info'),
+  LOG_PRETTY_PRINT: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   API_PREFIX: z.string().min(1).default('api'),
   API_VERSION: z.string().min(1).default('v1'),

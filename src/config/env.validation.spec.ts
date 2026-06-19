@@ -12,6 +12,8 @@ describe('validateEnv', () => {
   it('returns safe non-secret defaults when database values are provided', () => {
     expect(validateEnv(requiredDatabaseEnv)).toEqual({
       NODE_ENV: 'development',
+      LOG_LEVEL: 'info',
+      LOG_PRETTY_PRINT: false,
       PORT: 3000,
       API_PREFIX: 'api',
       API_VERSION: 'v1',
@@ -29,6 +31,8 @@ describe('validateEnv', () => {
     expect(
       validateEnv({
         NODE_ENV: 'test',
+        LOG_LEVEL: 'debug',
+        LOG_PRETTY_PRINT: 'true',
         PORT: '4000',
         API_PREFIX: 'internal',
         API_VERSION: 'v2',
@@ -41,6 +45,8 @@ describe('validateEnv', () => {
       }),
     ).toEqual({
       NODE_ENV: 'test',
+      LOG_LEVEL: 'debug',
+      LOG_PRETTY_PRINT: true,
       PORT: 4000,
       API_PREFIX: 'internal',
       API_VERSION: 'v2',
@@ -61,6 +67,8 @@ describe('validateEnv', () => {
     expect(() =>
       validateEnv({
         NODE_ENV: 'local',
+        LOG_LEVEL: 'chatty',
+        LOG_PRETTY_PRINT: 'sometimes',
         PORT: '99999',
         POSTGRES_USER: 'escrova',
         POSTGRES_PASSWORD: 'escrova_password',

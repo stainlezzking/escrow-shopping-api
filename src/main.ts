@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { ConfigService } from '@nestjs/config';
+import { Logger } from 'nestjs-pino';
 
 interface AppConfig {
   port: number;
@@ -16,7 +17,8 @@ interface AppConfig {
  * @returns A promise that resolves after the NestJS server starts listening.
  */
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  app.useLogger(app.get(Logger));
   const configService = app.get(ConfigService);
   const appConfig = configService.getOrThrow<AppConfig>('app');
   const globalPrefix = `${appConfig.apiPrefix}/${appConfig.apiVersion}`;
