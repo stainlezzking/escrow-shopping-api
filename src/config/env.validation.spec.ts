@@ -7,6 +7,7 @@ describe('validateEnv', () => {
     POSTGRES_DB: 'escrova_db',
     DATABASE_URL:
       'postgresql://escrova:escrova_password@localhost:5432/escrova_db?schema=public',
+    JWT_ACCESS_TOKEN_SECRET: 'test_access_token_secret_with_32_chars',
   };
 
   it('returns safe non-secret defaults when database values are provided', () => {
@@ -24,6 +25,8 @@ describe('validateEnv', () => {
       POSTGRES_PORT: 5432,
       DATABASE_URL:
         'postgresql://escrova:escrova_password@localhost:5432/escrova_db?schema=public',
+      JWT_ACCESS_TOKEN_SECRET: 'test_access_token_secret_with_32_chars',
+      JWT_ACCESS_TOKEN_EXPIRES_IN: '15m',
     });
   });
 
@@ -42,6 +45,8 @@ describe('validateEnv', () => {
         POSTGRES_DB: 'escrova_db',
         POSTGRES_PORT: '6543',
         DATABASE_URL: 'postgresql://user:pass@localhost:5432/db?schema=public',
+        JWT_ACCESS_TOKEN_SECRET: 'test_access_token_secret_with_32_chars',
+        JWT_ACCESS_TOKEN_EXPIRES_IN: '30m',
       }),
     ).toEqual({
       NODE_ENV: 'test',
@@ -56,6 +61,8 @@ describe('validateEnv', () => {
       POSTGRES_DB: 'escrova_db',
       POSTGRES_PORT: 6543,
       DATABASE_URL: 'postgresql://user:pass@localhost:5432/db?schema=public',
+      JWT_ACCESS_TOKEN_SECRET: 'test_access_token_secret_with_32_chars',
+      JWT_ACCESS_TOKEN_EXPIRES_IN: '30m',
     });
   });
 

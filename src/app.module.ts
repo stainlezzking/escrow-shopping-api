@@ -6,6 +6,7 @@ import { GlobalExceptionFilter } from './common/filters/global-exception.filter'
 import { ApiResponseInterceptor } from './common/interceptors/api-response.interceptor';
 import { ZodValidationPipe } from './common/pipes/zod-validation.pipe';
 import appConfig from './config/app.config';
+import authConfig from './config/auth.config';
 import databaseConfig from './config/database.config';
 import { validateEnv } from './config/env.validation';
 import loggingConfig from './config/logging.config';
@@ -14,7 +15,9 @@ import {
   buildPinoHttpOptions,
 } from './config/pino-http-options';
 import { PrismaModule } from './database/prisma.module';
+import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
+import { UsersModule } from './modules/users/users.module';
 
 /**
  * Root application module for the Escrova modular monolith.
@@ -24,7 +27,7 @@ import { HealthModule } from './modules/health/health.module';
     ConfigModule.forRoot({
       envFilePath: '.env',
       isGlobal: true,
-      load: [appConfig, databaseConfig, loggingConfig],
+      load: [appConfig, authConfig, databaseConfig, loggingConfig],
       validate: validateEnv,
     }),
     LoggerModule.forRootAsync({
@@ -39,6 +42,8 @@ import { HealthModule } from './modules/health/health.module';
     }),
     PrismaModule,
     HealthModule,
+    UsersModule,
+    AuthModule,
   ],
   providers: [
     {

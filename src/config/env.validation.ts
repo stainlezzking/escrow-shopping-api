@@ -27,6 +27,8 @@ export const envSchema = z.object({
   POSTGRES_DB: z.string().min(1),
   POSTGRES_PORT: z.coerce.number().int().min(1).max(65535).default(5432),
   DATABASE_URL: z.string().url(),
+  JWT_ACCESS_TOKEN_SECRET: z.string().min(32),
+  JWT_ACCESS_TOKEN_EXPIRES_IN: z.string().min(1).default('15m'),
 });
 
 export type EnvVariables = z.infer<typeof envSchema>;
