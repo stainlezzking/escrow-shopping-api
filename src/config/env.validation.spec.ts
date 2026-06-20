@@ -9,6 +9,8 @@ describe('validateEnv', () => {
       'postgresql://escrova:escrova_password@localhost:5432/escrova_db?schema=public',
     JWT_ACCESS_TOKEN_SECRET: 'test_access_token_secret_with_32_chars',
     GOOGLE_CLIENT_ID: '',
+    MINIO_ROOT_PASSWORD: 'escrova_minio_password',
+    STORAGE_SECRET_KEY: 'escrova_minio_password',
   };
 
   it('returns safe non-secret defaults when database values are provided', () => {
@@ -29,6 +31,15 @@ describe('validateEnv', () => {
       JWT_ACCESS_TOKEN_SECRET: 'test_access_token_secret_with_32_chars',
       JWT_ACCESS_TOKEN_EXPIRES_IN: '15m',
       GOOGLE_CLIENT_ID: '',
+      MINIO_ROOT_USER: 'escrova_minio',
+      MINIO_ROOT_PASSWORD: 'escrova_minio_password',
+      MINIO_API_PORT: 9000,
+      MINIO_CONSOLE_PORT: 9001,
+      STORAGE_ENDPOINT: 'http://localhost:9000',
+      STORAGE_PUBLIC_URL: 'http://localhost:9000',
+      STORAGE_ACCESS_KEY: 'escrova_minio',
+      STORAGE_SECRET_KEY: 'escrova_minio_password',
+      STORAGE_PRODUCT_IMAGES_BUCKET: 'escrova-product-images',
     });
   });
 
@@ -50,6 +61,15 @@ describe('validateEnv', () => {
         JWT_ACCESS_TOKEN_SECRET: 'test_access_token_secret_with_32_chars',
         JWT_ACCESS_TOKEN_EXPIRES_IN: '30m',
         GOOGLE_CLIENT_ID: 'google-client.apps.googleusercontent.com',
+        MINIO_ROOT_USER: 'minio_user',
+        MINIO_ROOT_PASSWORD: 'minio_password',
+        MINIO_API_PORT: '9100',
+        MINIO_CONSOLE_PORT: '9101',
+        STORAGE_ENDPOINT: 'http://localhost:9100',
+        STORAGE_PUBLIC_URL: 'https://cdn.example.com',
+        STORAGE_ACCESS_KEY: 'minio_user',
+        STORAGE_SECRET_KEY: 'minio_password',
+        STORAGE_PRODUCT_IMAGES_BUCKET: 'product-images',
       }),
     ).toEqual({
       NODE_ENV: 'test',
@@ -67,6 +87,15 @@ describe('validateEnv', () => {
       JWT_ACCESS_TOKEN_SECRET: 'test_access_token_secret_with_32_chars',
       JWT_ACCESS_TOKEN_EXPIRES_IN: '30m',
       GOOGLE_CLIENT_ID: 'google-client.apps.googleusercontent.com',
+      MINIO_ROOT_USER: 'minio_user',
+      MINIO_ROOT_PASSWORD: 'minio_password',
+      MINIO_API_PORT: 9100,
+      MINIO_CONSOLE_PORT: 9101,
+      STORAGE_ENDPOINT: 'http://localhost:9100',
+      STORAGE_PUBLIC_URL: 'https://cdn.example.com',
+      STORAGE_ACCESS_KEY: 'minio_user',
+      STORAGE_SECRET_KEY: 'minio_password',
+      STORAGE_PRODUCT_IMAGES_BUCKET: 'product-images',
     });
   });
 

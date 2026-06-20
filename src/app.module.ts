@@ -14,13 +14,16 @@ import {
   LoggingConfig,
   buildPinoHttpOptions,
 } from './config/pino-http-options';
+import storageConfig from './config/storage.config';
 import { PrismaModule } from './database/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { BuyerProfilesModule } from './modules/buyer-profiles/buyer-profiles.module';
 import { CategoriesModule } from './modules/categories/categories.module';
 import { HealthModule } from './modules/health/health.module';
 import { KycModule } from './modules/kyc/kyc.module';
+import { ProductsModule } from './modules/products/products.module';
 import { SellerStorefrontsModule } from './modules/seller-storefronts/seller-storefronts.module';
+import { StorageModule } from './storage/storage.module';
 import { UsersModule } from './modules/users/users.module';
 
 /**
@@ -31,7 +34,13 @@ import { UsersModule } from './modules/users/users.module';
     ConfigModule.forRoot({
       envFilePath: '.env',
       isGlobal: true,
-      load: [appConfig, authConfig, databaseConfig, loggingConfig],
+      load: [
+        appConfig,
+        authConfig,
+        databaseConfig,
+        loggingConfig,
+        storageConfig,
+      ],
       validate: validateEnv,
     }),
     LoggerModule.forRootAsync({
@@ -45,6 +54,7 @@ import { UsersModule } from './modules/users/users.module';
       }),
     }),
     PrismaModule,
+    StorageModule,
     HealthModule,
     UsersModule,
     AuthModule,
@@ -52,6 +62,7 @@ import { UsersModule } from './modules/users/users.module';
     CategoriesModule,
     SellerStorefrontsModule,
     KycModule,
+    ProductsModule,
   ],
   providers: [
     {
