@@ -18,6 +18,7 @@ import { PrismaModule } from './database/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { BuyerProfilesModule } from './modules/buyer-profiles/buyer-profiles.module';
 import { HealthModule } from './modules/health/health.module';
+import { KycModule } from './modules/kyc/kyc.module';
 import { SellerStorefrontsModule } from './modules/seller-storefronts/seller-storefronts.module';
 import { UsersModule } from './modules/users/users.module';
 
@@ -48,6 +49,7 @@ import { UsersModule } from './modules/users/users.module';
     AuthModule,
     BuyerProfilesModule,
     SellerStorefrontsModule,
+    KycModule,
   ],
   providers: [
     {
