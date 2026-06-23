@@ -25,6 +25,7 @@ import { ProductsModule } from './modules/products/products.module';
 import { SellerStorefrontsModule } from './modules/seller-storefronts/seller-storefronts.module';
 import { StorageModule } from './storage/storage.module';
 import { UsersModule } from './modules/users/users.module';
+import { WalletsModule } from './modules/wallets/wallets.module';
 
 /**
  * Root application module for the Escrova modular monolith.
@@ -63,6 +64,7 @@ import { UsersModule } from './modules/users/users.module';
     SellerStorefrontsModule,
     KycModule,
     ProductsModule,
+    WalletsModule,
   ],
   providers: [
     {
