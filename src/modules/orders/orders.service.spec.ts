@@ -1,0 +1,195 @@
+/* eslint-disable @typescript-eslint/no-unsafe-assignment */
+/* eslint-disable @typescript-eslint/no-unsafe-call */
+/* eslint-disable @typescript-eslint/no-unsafe-return */
+/* eslint-disable @typescript-eslint/require-await */
+/* eslint-disable @typescript-eslint/unbound-method */
+import {
+  NotFoundException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
+import {
+  AccountStatus,
+  KycStatus,
+  OrderItemStatus,
+  OrderStatus,
+  ProductStatus,
+  StoreStatus,
+} from '@prisma/client';
+import { PrismaService } from '../../database/prisma.service';
+import { OrdersService } from './orders.service';
+
+describe('OrdersService', () => {
+  const buyerProfile = {
+    id: 'buyer_profile_one',
+    userId: 'buyer_user',
+    fullName: 'Ada Buyer',
+    phoneNumber: null,
+    status: AccountStatus.ACTIVE,
+    createdAt: new Date('2026-06-23T09:00:00.000Z'),
+    updatedAt: new Date('2026-06-23T09:00:00.000Z'),
+  };
+
+  const product = {
+    id: 'product_one',
+    sellerProfileId: 'store_one',
+    title: 'Phone',
+    slug: 'phone',
+    description: null,
+    priceKobo: BigInt(10000),
+    stockQuantity: 5,
+    status: ProductStatus.LIVE,
+    viewCount: 0,
+    isActive: true,
+    createdAt: new Date('2026-06-23T09:00:00.000Z'),
+    updatedAt: new Date('2026-06-23T09:00:00.000Z'),
+    deletedAt: null,
+    sellerProfile: {
+      id: 'store_one',
+      businessName: 'Tech Store',
+      storeHandle: 'tech-store',
+      kycStatus: KycStatus.VERIFIED,
+      status: StoreStatus.ACTIVE,
+    },
+  };
+
+  const createdOrder = {
+    id: 'order_one',
+    buyerProfileId: 'buyer_profile_one',
+    orderReference: 'ORD-20260623-ABC123',
+    status: OrderStatus.PENDING_PAYMENT,
+    totalProductAmountKobo: BigInt(20000),
+    totalShippingFeeKobo: BigInt(0),
+    totalServiceFeeKobo: BigInt(1000),
+    totalOrderAmountKobo: BigInt(21000),
+    cancelledAt: null,
+    completedAt: null,
+    createdAt: new Date('2026-06-23T09:01:00.000Z'),
+    updatedAt: new Date('2026-06-23T09:01:00.000Z'),
+    items: [
+      {
+        id: 'order_item_one',
+        orderId: 'order_one',
+        productId: 'product_one',
+        sellerProfileId: 'store_one',
+        quantity: 2,
+        unitPriceAtCheckoutKobo: BigInt(10000),
+        productAmountKobo: BigInt(20000),
+        shippingFeeKobo: BigInt(0),
+        serviceFeeKobo: BigInt(1000),
+        netEscrowAmountKobo: BigInt(20000),
+        status: OrderItemStatus.PENDING_PAYMENT,
+        deliveryHandledBy: null,
+        safetyTimerExpiresAt: null,
+        dispatchedAt: null,
+        deliveredAt: null,
+        confirmedAt: null,
+        releasedAt: null,
+        refundedAt: null,
+        cancelledAt: null,
+        createdAt: new Date('2026-06-23T09:01:00.000Z'),
+        updatedAt: new Date('2026-06-23T09:01:00.000Z'),
+        product,
+      },
+    ],
+  };
+
+  let tx: {
+    order: { create: jest.Mock };
+  };
+  let prisma: jest.Mocked<PrismaService>;
+  let service: OrdersService;
+
+  beforeEach(() => {
+    tx = {
+      order: {
+        create: jest.fn().mockResolvedValue(createdOrder),
+      },
+    };
+
+    prisma = {
+      buyerProfile: {
+        findUnique: jest.fn().mockResolvedValue(buyerProfile),
+      },
+      product: {
+        findMany: jest.fn().mockResolvedValue([product]),
+      },
+      order: {
+        create: jest.fn(),
+      },
+      $transaction: jest.fn(async (callback) => callback(tx)),
+    } as unknown as jest.Mocked<PrismaService>;
+
+    service = new OrdersService(prisma);
+  });
+
+  it('initializes a pending payment order from client-provided items without reading cart items', async () => {
+    const result = await service.initializeOrder('buyer_user', {
+      items: [{ productId: 'product_one', quantity: 2 }],
+    });
+
+    expect(prisma.buyerProfile.findUnique).toHaveBeenCalledWith({
+      where: { userId: 'buyer_user' },
+    });
+    expect(prisma.product.findMany).toHaveBeenCalledWith({
+      where: { id: { in: ['product_one'] } },
+      include: { sellerProfile: true },
+    });
+    expect(tx.order.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        buyerProfileId: 'buyer_profile_one',
+        status: OrderStatus.PENDING_PAYMENT,
+        totalProductAmountKobo: BigInt(20000),
+        totalShippingFeeKobo: BigInt(0),
+        totalServiceFeeKobo: BigInt(1000),
+        totalOrderAmountKobo: BigInt(21000),
+        items: {
+          create: [
+            expect.objectContaining({
+              productId: 'product_one',
+              sellerProfileId: 'store_one',
+              quantity: 2,
+              unitPriceAtCheckoutKobo: BigInt(10000),
+              productAmountKobo: BigInt(20000),
+              shippingFeeKobo: BigInt(0),
+              serviceFeeKobo: BigInt(1000),
+              netEscrowAmountKobo: BigInt(20000),
+              status: OrderItemStatus.PENDING_PAYMENT,
+            }),
+          ],
+        },
+      }),
+      include: expect.any(Object),
+    });
+    expect(result.status).toBe(OrderStatus.PENDING_PAYMENT);
+    expect(result.totalOrderAmountKobo).toBe('21000');
+    expect(result.items[0].serviceFeeKobo).toBe('1000');
+  });
+
+  it('rejects checkout when the buyer profile does not exist', async () => {
+    prisma.buyerProfile.findUnique.mockResolvedValue(null);
+
+    await expect(
+      service.initializeOrder('missing_user', {
+        items: [{ productId: 'product_one', quantity: 1 }],
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('rejects missing, hidden, inactive, or unverified seller products', async () => {
+    prisma.product.findMany.mockResolvedValue([]);
+
+    await expect(
+      service.initializeOrder('buyer_user', {
+        items: [{ productId: 'missing_product', quantity: 1 }],
+      }),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+  });
+
+  it('rejects products with insufficient stock', async () => {
+    await expect(
+      service.initializeOrder('buyer_user', {
+        items: [{ productId: 'product_one', quantity: 6 }],
+      }),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+  });
+});

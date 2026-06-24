@@ -21,6 +21,7 @@ import { BuyerProfilesModule } from './modules/buyer-profiles/buyer-profiles.mod
 import { CategoriesModule } from './modules/categories/categories.module';
 import { HealthModule } from './modules/health/health.module';
 import { KycModule } from './modules/kyc/kyc.module';
+import { OrdersModule } from './modules/orders/orders.module';
 import { ProductsModule } from './modules/products/products.module';
 import { SellerStorefrontsModule } from './modules/seller-storefronts/seller-storefronts.module';
 import { StorageModule } from './storage/storage.module';
@@ -64,6 +65,7 @@ import { WalletsModule } from './modules/wallets/wallets.module';
     SellerStorefrontsModule,
     KycModule,
     ProductsModule,
+    OrdersModule,
     WalletsModule,
   ],
   providers: [
