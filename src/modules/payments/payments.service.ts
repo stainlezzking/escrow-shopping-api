@@ -8,11 +8,16 @@ import {
 } from '@nestjs/common';
 import {
   EscrowStatus,
+  LedgerDirection,
+  LedgerEntryType,
   OrderItemStatus,
   OrderStatus,
   PaymentProvider,
   PaymentStatus,
   Prisma,
+  Wallet,
+  WalletOwnerType,
+  WalletStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { InitiatePaymentInput } from './dto/payment.dto';
@@ -41,6 +46,8 @@ const paymentProcessingInclude = {
 type PaymentWithOrder = Prisma.PaymentGetPayload<{
   include: typeof paymentProcessingInclude;
 }>;
+
+type PaymentTransactionClient = Prisma.TransactionClient;
 
 /**
  * Handles payment initiation, server-side verification, and webhook processing.
@@ -261,6 +268,20 @@ export class PaymentsService {
     },
   ): Promise<PaymentResponseDto> {
     const paidPayment = await this.prisma.$transaction(async (tx) => {
+      const currentPayment = await tx.payment.findUnique({
+        where: { id: payment.id },
+      });
+
+      if (!currentPayment) {
+        throw new NotFoundException('Payment not found');
+      }
+
+      if (currentPayment.status === PaymentStatus.SUCCESS) {
+        return currentPayment;
+      }
+
+      const platformEscrowWallet =
+        await this.getOrCreatePlatformEscrowWallet(tx);
       const updatedPayment = await tx.payment.update({
         where: { id: payment.id },
         data: {
@@ -286,25 +307,42 @@ export class PaymentsService {
         data: { status: OrderItemStatus.AWAITING_DISPATCH },
       });
 
-      await tx.escrowTransaction.createMany({
-        data: payment.order.items.map((item) => ({
+      for (const item of payment.order.items) {
+        const grossAmountKobo =
+          item.netEscrowAmountKobo + item.serviceFeeKobo + item.shippingFeeKobo;
+        const escrow = await tx.escrowTransaction.upsert({
+          where: { orderItemId: item.id },
+          create: {
+            orderItemId: item.id,
+            sellerProfileId: item.sellerProfileId,
+            buyerProfileId: payment.buyerProfileId,
+            paymentId: payment.id,
+            escrowReference: this.generateEscrowReference(item.id),
+            status: EscrowStatus.HELD,
+            grossAmountKobo,
+            sellerNetAmountKobo: item.netEscrowAmountKobo,
+            platformFeeKobo: item.serviceFeeKobo,
+            shippingFeeKobo: item.shippingFeeKobo,
+            heldAt: new Date(),
+          },
+          update: {
+            paymentId: payment.id,
+            status: EscrowStatus.HELD,
+            heldAt: new Date(),
+          },
+        });
+
+        await this.createEscrowHoldLedgerEntry({
+          tx,
+          walletId: platformEscrowWallet.id,
+          amountKobo: grossAmountKobo,
+          orderId: payment.orderId,
           orderItemId: item.id,
-          sellerProfileId: item.sellerProfileId,
-          buyerProfileId: payment.buyerProfileId,
+          escrowId: escrow.id,
           paymentId: payment.id,
-          escrowReference: this.generateEscrowReference(item.id),
-          status: EscrowStatus.HELD,
-          grossAmountKobo:
-            item.netEscrowAmountKobo +
-            item.serviceFeeKobo +
-            item.shippingFeeKobo,
-          sellerNetAmountKobo: item.netEscrowAmountKobo,
-          platformFeeKobo: item.serviceFeeKobo,
-          shippingFeeKobo: item.shippingFeeKobo,
-          heldAt: new Date(),
-        })),
-        skipDuplicates: true,
-      });
+          escrowReference: escrow.escrowReference,
+        });
+      }
 
       return updatedPayment;
     });
@@ -351,6 +389,88 @@ export class PaymentsService {
         'Payment webhook did not match the payment record',
       );
     }
+  }
+
+  private async getOrCreatePlatformEscrowWallet(
+    tx: PaymentTransactionClient,
+  ): Promise<Wallet> {
+    const existingWallet = await tx.wallet.findFirst({
+      where: {
+        ownerType: WalletOwnerType.PLATFORM,
+        status: WalletStatus.ACTIVE,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (existingWallet) {
+      return existingWallet;
+    }
+
+    const platformEntity = await tx.platformEntity.create({
+      data: { organizationName: 'Escrova Platform' },
+    });
+
+    return tx.wallet.create({
+      data: {
+        ownerType: WalletOwnerType.PLATFORM,
+        platformEntityId: platformEntity.id,
+        status: WalletStatus.ACTIVE,
+      },
+    });
+  }
+
+  private async createEscrowHoldLedgerEntry(input: {
+    tx: PaymentTransactionClient;
+    walletId: string;
+    amountKobo: bigint;
+    orderId: string;
+    orderItemId: string;
+    escrowId: string;
+    paymentId: string;
+    escrowReference: string;
+  }): Promise<void> {
+    const idempotencyKey = `payment:${input.paymentId}:escrow-hold:${input.orderItemId}`;
+    const existingLedgerEntry = await input.tx.walletLedgerEntry.findUnique({
+      where: { idempotencyKey },
+    });
+
+    if (existingLedgerEntry) {
+      return;
+    }
+
+    const wallet = await input.tx.wallet.findUnique({
+      where: { id: input.walletId },
+    });
+
+    if (!wallet) {
+      throw new NotFoundException('Platform escrow wallet not found');
+    }
+
+    const balanceBefore = wallet.escrowBalanceKobo;
+    const balanceAfter = balanceBefore + input.amountKobo;
+
+    await input.tx.wallet.update({
+      where: { id: wallet.id },
+      data: { escrowBalanceKobo: balanceAfter },
+    });
+
+    await input.tx.walletLedgerEntry.create({
+      data: {
+        walletId: wallet.id,
+        direction: LedgerDirection.CREDIT,
+        entryType: LedgerEntryType.ESCROW_HOLD,
+        amountKobo: input.amountKobo,
+        balanceBeforeKobo: balanceBefore,
+        balanceAfterKobo: balanceAfter,
+        reference: `escrow-hold:${input.escrowReference}`,
+        idempotencyKey,
+        relatedOrderId: input.orderId,
+        relatedOrderItemId: input.orderItemId,
+        relatedEscrowId: input.escrowId,
+        relatedPaymentId: input.paymentId,
+        narration: 'Escrow funded after verified payment',
+      },
+    });
   }
 
   private generateInternalReference(): string {

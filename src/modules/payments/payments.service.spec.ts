@@ -10,10 +10,14 @@ import {
 } from '@nestjs/common';
 import {
   EscrowStatus,
+  LedgerDirection,
+  LedgerEntryType,
   OrderItemStatus,
   OrderStatus,
   PaymentProvider,
   PaymentStatus,
+  WalletOwnerType,
+  WalletStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { PaymentProviderPort } from './providers/payment-provider.interface';
@@ -83,12 +87,54 @@ describe('PaymentsService', () => {
     updatedAt: new Date('2026-07-03T09:01:00.000Z'),
     order,
   };
+  const platformEscrowWallet = {
+    id: 'platform_wallet_one',
+    ownerType: WalletOwnerType.PLATFORM,
+    buyerProfileId: null,
+    sellerProfileId: null,
+    platformEntityId: 'platform_entity_one',
+    availableBalanceKobo: BigInt(0),
+    escrowBalanceKobo: BigInt(50000),
+    pendingPayoutBalanceKobo: BigInt(0),
+    payoutPinHash: null,
+    status: WalletStatus.ACTIVE,
+    createdAt: new Date('2026-07-03T08:00:00.000Z'),
+    updatedAt: new Date('2026-07-03T08:00:00.000Z'),
+  };
+  const escrow = {
+    id: 'escrow_one',
+    orderItemId: 'order_item_one',
+    sellerProfileId: 'store_one',
+    buyerProfileId: 'buyer_profile_one',
+    paymentId: 'payment_one',
+    escrowReference: 'ESC-order_item_one',
+    status: EscrowStatus.HELD,
+    grossAmountKobo: BigInt(21000),
+    sellerNetAmountKobo: BigInt(20000),
+    platformFeeKobo: BigInt(1000),
+    shippingFeeKobo: BigInt(0),
+    heldAt: new Date('2026-07-03T09:02:00.000Z'),
+    disputedAt: null,
+    releasedAt: null,
+    refundedAt: null,
+    cancelledAt: null,
+    createdAt: new Date('2026-07-03T09:02:00.000Z'),
+    updatedAt: new Date('2026-07-03T09:02:00.000Z'),
+  };
 
   let tx: {
-    payment: { update: jest.Mock };
+    payment: { findUnique: jest.Mock; update: jest.Mock };
     order: { update: jest.Mock };
     orderItem: { updateMany: jest.Mock };
-    escrowTransaction: { createMany: jest.Mock };
+    escrowTransaction: { upsert: jest.Mock };
+    wallet: {
+      findFirst: jest.Mock;
+      findUnique: jest.Mock;
+      update: jest.Mock;
+      create: jest.Mock;
+    };
+    platformEntity: { create: jest.Mock };
+    walletLedgerEntry: { findUnique: jest.Mock; create: jest.Mock };
   };
   let prisma: jest.Mocked<PrismaService>;
   let provider: jest.Mocked<PaymentProviderPort>;
@@ -97,6 +143,7 @@ describe('PaymentsService', () => {
   beforeEach(() => {
     tx = {
       payment: {
+        findUnique: jest.fn().mockResolvedValue(payment),
         update: jest.fn().mockResolvedValue({
           ...payment,
           status: PaymentStatus.SUCCESS,
@@ -112,7 +159,29 @@ describe('PaymentsService', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       escrowTransaction: {
-        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        upsert: jest.fn().mockResolvedValue(escrow),
+      },
+      wallet: {
+        findFirst: jest.fn().mockResolvedValue(platformEscrowWallet),
+        findUnique: jest.fn().mockResolvedValue(platformEscrowWallet),
+        update: jest.fn().mockResolvedValue({
+          ...platformEscrowWallet,
+          escrowBalanceKobo: BigInt(71000),
+        }),
+        create: jest.fn().mockResolvedValue(platformEscrowWallet),
+      },
+      platformEntity: {
+        create: jest.fn().mockResolvedValue({
+          id: 'platform_entity_one',
+          organizationName: 'Escrova Platform',
+        }),
+      },
+      walletLedgerEntry: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({
+          id: 'ledger_one',
+          walletId: 'platform_wallet_one',
+        }),
       },
     };
 
@@ -230,20 +299,42 @@ describe('PaymentsService', () => {
       where: { orderId: 'order_one', status: OrderItemStatus.PENDING_PAYMENT },
       data: { status: OrderItemStatus.AWAITING_DISPATCH },
     });
-    expect(tx.escrowTransaction.createMany).toHaveBeenCalledWith({
-      data: [
-        expect.objectContaining({
-          orderItemId: 'order_item_one',
-          sellerProfileId: 'store_one',
-          buyerProfileId: 'buyer_profile_one',
-          paymentId: 'payment_one',
-          status: EscrowStatus.HELD,
-          grossAmountKobo: BigInt(21000),
-          sellerNetAmountKobo: BigInt(20000),
-          platformFeeKobo: BigInt(1000),
-        }),
-      ],
-      skipDuplicates: true,
+    expect(tx.escrowTransaction.upsert).toHaveBeenCalledWith({
+      where: { orderItemId: 'order_item_one' },
+      create: expect.objectContaining({
+        orderItemId: 'order_item_one',
+        sellerProfileId: 'store_one',
+        buyerProfileId: 'buyer_profile_one',
+        paymentId: 'payment_one',
+        status: EscrowStatus.HELD,
+        grossAmountKobo: BigInt(21000),
+        sellerNetAmountKobo: BigInt(20000),
+        platformFeeKobo: BigInt(1000),
+      }),
+      update: expect.objectContaining({
+        paymentId: 'payment_one',
+        status: EscrowStatus.HELD,
+      }),
+    });
+    expect(tx.wallet.update).toHaveBeenCalledWith({
+      where: { id: 'platform_wallet_one' },
+      data: { escrowBalanceKobo: BigInt(71000) },
+    });
+    expect(tx.walletLedgerEntry.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        walletId: 'platform_wallet_one',
+        direction: LedgerDirection.CREDIT,
+        entryType: LedgerEntryType.ESCROW_HOLD,
+        amountKobo: BigInt(21000),
+        balanceBeforeKobo: BigInt(50000),
+        balanceAfterKobo: BigInt(71000),
+        reference: 'escrow-hold:ESC-order_item_one',
+        idempotencyKey: 'payment:payment_one:escrow-hold:order_item_one',
+        relatedOrderId: 'order_one',
+        relatedOrderItemId: 'order_item_one',
+        relatedEscrowId: 'escrow_one',
+        relatedPaymentId: 'payment_one',
+      }),
     });
     expect(result.status).toBe(PaymentStatus.SUCCESS);
   });
@@ -257,7 +348,36 @@ describe('PaymentsService', () => {
     await service.verifyPayment('buyer_user', 'payment_one');
 
     expect(provider.verifyPayment).not.toHaveBeenCalled();
-    expect(tx.escrowTransaction.createMany).not.toHaveBeenCalled();
+    expect(tx.escrowTransaction.upsert).not.toHaveBeenCalled();
+    expect(tx.walletLedgerEntry.create).not.toHaveBeenCalled();
+  });
+
+  it('does not duplicate escrow or ledger entries when payment becomes successful inside the transaction', async () => {
+    tx.payment.findUnique.mockResolvedValue({
+      ...payment,
+      status: PaymentStatus.SUCCESS,
+    });
+
+    const result = await service.verifyPayment('buyer_user', 'payment_one');
+
+    expect(result.status).toBe(PaymentStatus.SUCCESS);
+    expect(tx.payment.update).not.toHaveBeenCalled();
+    expect(tx.escrowTransaction.upsert).not.toHaveBeenCalled();
+    expect(tx.walletLedgerEntry.create).not.toHaveBeenCalled();
+  });
+
+  it('does not credit the platform escrow wallet twice for an existing escrow hold ledger entry', async () => {
+    tx.walletLedgerEntry.findUnique.mockResolvedValue({
+      id: 'ledger_one',
+      walletId: 'platform_wallet_one',
+      idempotencyKey: 'payment:payment_one:escrow-hold:order_item_one',
+    });
+
+    await service.verifyPayment('buyer_user', 'payment_one');
+
+    expect(tx.escrowTransaction.upsert).toHaveBeenCalledTimes(1);
+    expect(tx.wallet.update).not.toHaveBeenCalled();
+    expect(tx.walletLedgerEntry.create).not.toHaveBeenCalled();
   });
 
   it('rejects invalid webhook signatures', async () => {
@@ -301,7 +421,8 @@ describe('PaymentsService', () => {
       where: { providerReference: 'paystack_ref_one' },
       include: expect.any(Object),
     });
-    expect(tx.escrowTransaction.createMany).toHaveBeenCalledTimes(1);
+    expect(tx.escrowTransaction.upsert).toHaveBeenCalledTimes(1);
+    expect(tx.walletLedgerEntry.create).toHaveBeenCalledTimes(1);
   });
 
   it('rejects provider success when amount does not match payment record', async () => {
@@ -316,6 +437,7 @@ describe('PaymentsService', () => {
       service.verifyPayment('buyer_user', 'payment_one'),
     ).rejects.toBeInstanceOf(UnprocessableEntityException);
 
-    expect(tx.escrowTransaction.createMany).not.toHaveBeenCalled();
+    expect(tx.escrowTransaction.upsert).not.toHaveBeenCalled();
+    expect(tx.walletLedgerEntry.create).not.toHaveBeenCalled();
   });
 });
