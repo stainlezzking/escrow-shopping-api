@@ -10,6 +10,7 @@ import authConfig from './config/auth.config';
 import databaseConfig from './config/database.config';
 import { validateEnv } from './config/env.validation';
 import loggingConfig from './config/logging.config';
+import paymentConfig from './config/payment.config';
 import {
   LoggingConfig,
   buildPinoHttpOptions,
@@ -22,6 +23,7 @@ import { CategoriesModule } from './modules/categories/categories.module';
 import { HealthModule } from './modules/health/health.module';
 import { KycModule } from './modules/kyc/kyc.module';
 import { OrdersModule } from './modules/orders/orders.module';
+import { PaymentsModule } from './modules/payments/payments.module';
 import { ProductsModule } from './modules/products/products.module';
 import { SellerStorefrontsModule } from './modules/seller-storefronts/seller-storefronts.module';
 import { StorageModule } from './storage/storage.module';
@@ -41,6 +43,7 @@ import { WalletsModule } from './modules/wallets/wallets.module';
         authConfig,
         databaseConfig,
         loggingConfig,
+        paymentConfig,
         storageConfig,
       ],
       validate: validateEnv,
@@ -66,6 +69,7 @@ import { WalletsModule } from './modules/wallets/wallets.module';
     KycModule,
     ProductsModule,
     OrdersModule,
+    PaymentsModule,
     WalletsModule,
   ],
   providers: [

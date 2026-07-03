@@ -17,7 +17,10 @@ interface AppConfig {
  * @returns A promise that resolves after the NestJS server starts listening.
  */
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  const app = await NestFactory.create(AppModule, {
+    bufferLogs: true,
+    rawBody: true,
+  });
   app.useLogger(app.get(Logger));
   const configService = app.get(ConfigService);
   const appConfig = configService.getOrThrow<AppConfig>('app');
