@@ -93,24 +93,27 @@ If a dispute occurs, Escrova uses submitted evidence such as waybill images, pro
 1. Seller registers or logs into Escrova.
 2. Seller creates one or more store profiles.
 3. Seller completes KYC for each store profile.
-4. Seller lists products and sets shipping prices.
+4. Seller lists products and configures delivery options where available.
 5. Buyer places an order and pays into escrow.
 6. Seller receives confirmation that funds are secured.
-7. Seller ships the item.
-8. Seller uploads proof of dispatch, such as a waybill image.
-9. Buyer confirms delivery or raises a dispute.
-10. Seller receives funds after buyer confirmation, auto-release, or admin dispute resolution.
+7. Seller marks the paid order item as ready for pickup.
+8. Escrova books or coordinates delivery through an integrated delivery provider where available, or falls back to seller-managed dispatch.
+9. Delivery provider or seller dispatch evidence is captured.
+10. Buyer inspects the item at delivery and accepts or rejects it through Escrova.
+11. Seller receives funds after buyer acceptance, valid OTP/confirmation, auto-release, or admin dispute resolution.
 
 ### 9.2 Buyer flow
 
 1. Buyer browses marketplace products or visits a seller storefront.
-2. Buyer adds products to cart.
-3. Buyer pays a consolidated order amount.
-4. Escrova splits the order into individual order items where necessary.
-5. Buyer tracks each item separately.
-6. Buyer confirms delivery using the Digital Handshake.
-7. Buyer may raise a dispute if the product is not delivered, incorrect, damaged, or unacceptable.
-8. Buyer receives a refund to wallet if the dispute is resolved in their favour.
+2. Buyer builds a cart on the frontend.
+3. Buyer initializes checkout by sending product IDs, quantities, and delivery details to Escrova.
+4. Escrova recalculates product totals, service fees, delivery fees, and availability on the backend.
+5. Buyer pays a consolidated order amount into escrow.
+6. Escrova splits the order into individual order items where necessary.
+7. Buyer tracks each item separately.
+8. Buyer confirms acceptance or rejection using the Digital Handshake.
+9. Buyer may raise a dispute if the product is not delivered, incorrect, damaged, or unacceptable.
+10. Buyer receives a refund to wallet if the dispute is resolved in their favour.
 
 ### 9.3 Admin flow
 
@@ -138,6 +141,7 @@ Refund conditions may include:
 
 * Admin resolves a dispute in favour of the buyer.
 * Seller fails to dispatch within an allowed timeframe.
+* Buyer rejects delivery and the rejection is validated through the return/dispute process.
 * Transaction is cancelled before fulfilment.
 
 ### 10.2 Digital Handshake and Verification
@@ -150,24 +154,31 @@ Supported confirmation methods may include:
 * Buyer gives a delivery OTP to the seller.
 * System auto-confirms after a defined safety period if no dispute is raised.
 
-### 10.3 Evidence-Based Dispatch
+### 10.3 Provider-Aware Delivery and Evidence
 
-Sellers must upload evidence after dispatching an order item.
+Escrova should coordinate delivery through integrated delivery providers where available. Provider delivery improves delivery fee transparency, tracking, pickup coordination, proof collection, and buyer acceptance/rejection handling.
 
-Evidence may include:
+Delivery should not be booked immediately after payment verification. Payment verification makes the seller eligible to prepare the item. The seller must mark the item as ready for pickup before Escrova books or schedules provider delivery.
 
+Seller-managed delivery may remain available as a fallback when provider delivery is unavailable.
+
+Dispatch and delivery evidence may include:
+
+* Provider tracking reference.
+* Provider pickup and delivery events.
 * Courier waybill image.
 * Dispatch receipt.
 * Delivery photo.
 * Tracking reference, where available.
+* Rider or courier notes where available.
 
-This evidence helps buyers track fulfilment and helps admins resolve disputes.
+This evidence helps buyers track fulfilment and helps admins resolve disputes. Provider delivery status is evidence only; it must not directly release escrow without buyer acceptance, valid OTP/confirmation, auto-release, or admin dispute resolution.
 
 ### 10.4 Order Item-Level Escrow
 
 Escrova supports multi-seller and multi-item orders.
 
-A buyer may pay once for several products, but the system should track each order item independently. Each order item can have its own seller, delivery status, escrow amount, proof of dispatch, dispute status, and release state.
+A buyer may pay once for several products, but the system should track each order item independently. Each order item can have its own seller, delivery status, delivery provider, escrow amount, proof of dispatch, dispute status, and release state.
 
 This allows one item in an order to be disputed while other completed items are released normally.
 
@@ -290,11 +301,11 @@ Buyers can:
 
 * Register and log in.
 * Browse products.
-* Add items to cart.
+* Add items to a frontend cart.
 * Place orders.
 * Pay into escrow.
 * Track purchases.
-* Confirm delivery.
+* Accept or reject delivery after inspection.
 * Raise disputes.
 * Manage delivery addresses.
 * Receive refunds into wallet.
@@ -309,9 +320,10 @@ Sellers can:
 * Add products.
 * Upload product images.
 * Manage inventory.
-* Set shipping prices.
+* Configure delivery options where applicable.
 * View paid orders.
-* Upload dispatch evidence.
+* Mark paid order items as ready for pickup.
+* Upload dispatch evidence for seller-managed delivery or fallback flows.
 * Verify buyer OTP where applicable.
 * Track escrow and available balances.
 * Receive payouts.
@@ -344,8 +356,11 @@ Admins can:
 10. Every financial movement must create an auditable transaction or ledger record.
 11. Money should be stored in the smallest currency unit, such as kobo.
 12. Generic status updates should not be allowed for escrow and wallet workflows. All status changes must pass through explicit business methods.
-13. The auto-release timer should only begin after the seller marks an item as shipped and uploads dispatch evidence.
-14. Admin actions must be logged with the admin ID, target record, action type, reason, and timestamp.
+13. Delivery provider status must not automatically release escrow by itself.
+14. The auto-release timer should only begin after the item has been dispatched or picked up and the required delivery evidence exists.
+15. Buyer rejection should enter a controlled return/dispute flow.
+16. Return costs may be temporarily reserved from held funds, but final responsibility should be assigned by policy or dispute outcome.
+17. Admin actions must be logged with the admin ID, target record, action type, reason, and timestamp.
 
 ## 13. Key Data Objects
 
@@ -361,9 +376,11 @@ The product requires the following major data objects:
 * Product Attribute
 * Business Category
 * Product Category
-* Cart Item
 * Order
 * Order Item
+* Delivery Quote
+* Delivery Shipment
+* Delivery Event
 * Dispatch Evidence
 * Dispute
 * KYC Document
@@ -386,16 +403,18 @@ The first version of Escrova should focus on proving the escrow transaction flow
 4. Basic KYC submission.
 5. Product listing.
 6. Product discovery.
-7. Cart and checkout.
+7. Frontend cart and backend checkout initialization.
 8. Escrow payment record creation.
 9. Order and order item tracking.
-10. Seller dispatch evidence upload.
-11. Buyer delivery confirmation.
-12. Fund release to seller wallet.
-13. Basic dispute creation.
-14. Admin dispute resolution.
-15. Seller wallet balance.
-16. Basic payout batch generation.
+10. Delivery quote and booking integration.
+11. Seller ready-for-pickup.
+12. Dispatch/delivery evidence capture.
+13. Buyer delivery acceptance/rejection.
+14. Fund release to seller wallet.
+15. Basic dispute creation.
+16. Admin dispute resolution.
+17. Seller wallet balance.
+18. Basic payout batch generation.
 
 ### Non-MVP features
 

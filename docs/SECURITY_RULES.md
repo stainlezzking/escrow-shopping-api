@@ -19,7 +19,8 @@ Escrova handles user identities, seller stores, KYC documents, payments, escrow,
 7. Do not release escrow without a valid state transition.
 8. Every sensitive admin action must be audited.
 9. Payment success must be verified server-side.
-10. Security rules must be enforced on the backend, not only in the UI.
+10. Delivery provider status must be treated as evidence, not escrow release authority.
+11. Security rules must be enforced on the backend, not only in the UI.
 
 ---
 
@@ -70,8 +71,8 @@ Guest users may only access public marketplace discovery.
 Buyers may only access their own:
 
 * Profile
-* Cart
 * Orders
+* Backend checkout/order initialization results
 * Delivery addresses
 * Disputes
 * Refund wallet
@@ -81,6 +82,7 @@ Sellers may only access resources linked to their own seller profile/store:
 * Storefront
 * Products
 * Order items
+* Delivery readiness and provider booking records for their own order items
 * Dispatch evidence
 * KYC records
 * Seller wallet
@@ -99,8 +101,11 @@ Authorization must include ownership checks.
 Examples:
 
 * A buyer cannot confirm delivery for another buyer’s order item.
+* A buyer cannot reject delivery for another buyer’s order item.
 * A buyer cannot open a dispute for another buyer’s order item.
 * A seller cannot dispatch another seller’s order item.
+* A seller cannot mark another seller’s order item as ready for pickup.
+* A seller cannot book delivery for another seller’s order item.
 * A seller cannot view another seller’s wallet.
 * A seller cannot update another seller’s product.
 * A user cannot access another user’s KYC documents.
@@ -121,6 +126,8 @@ Validate:
 * File metadata
 * Enum values
 * Money fields
+* Checkout product IDs, quantities, and selected attributes
+* Delivery quote, shipment, and provider references
 * Pagination
 * Sort fields
 * IDs and references
@@ -148,6 +155,7 @@ webhookSecret
 full KYC document numbers
 private KYC file URLs
 raw provider verification payloads
+raw delivery provider webhook payloads
 ```
 
 Only authorized users may view limited banking details.
@@ -178,6 +186,14 @@ OTPs:
 * Do not allow reuse.
 * Do not expose OTPs to sellers.
 * Delivery OTPs are buyer-side sensitive data.
+
+Delivery confirmation links, QR codes, GUIDs, or acceptance tokens:
+
+* Must be unguessable.
+* Must be scoped to one buyer and one order item.
+* Must expire or be single-use.
+* Must not be accepted for another buyer’s order item.
+* Must not expose sensitive order details in the token itself.
 
 Reset tokens:
 
@@ -211,7 +227,36 @@ Do not expose raw provider payloads to normal users.
 
 ---
 
-## 10. Escrow and Wallet Security Rules
+## 10. Delivery Provider Security Rules
+
+Delivery provider integrations must be isolated behind provider adapters.
+
+Provider webhooks must:
+
+* Verify provider signature or another documented authenticity mechanism.
+* Be idempotent using provider event IDs or stable provider references.
+* Reject invalid signatures and unknown shipments.
+* Store provider references and normalized event records.
+* Avoid exposing raw provider payloads to normal users.
+* Avoid logging provider secrets, webhook signatures, or buyer contact details unnecessarily.
+
+Provider events may update `DeliveryShipment` and append `DeliveryEvent` records.
+
+Provider events must not directly:
+
+* Confirm buyer acceptance.
+* Release escrow.
+* Refund escrow.
+* Resolve disputes.
+* Mutate wallet balances.
+
+Buyer acceptance or rejection must come through Escrova-controlled confirmation flows, valid OTP/QR/token confirmation, auto-release after the safety timer, or admin dispute resolution.
+
+Frontend cart data is never financial truth. At order initialization, the backend must fetch current product records, validate visibility and stock, recalculate product totals, delivery fees, service fees, and store the final checkout snapshot on orders and order items.
+
+---
+
+## 11. Escrow and Wallet Security Rules
 
 Escrow and wallet operations must use strict service methods.
 
@@ -227,8 +272,11 @@ Use business actions instead:
 
 ```txt
 confirmPayment
+markOrderItemReadyForPickup
+bookDeliveryForReadyOrderItem
 dispatchOrderItem
 confirmDelivery
+rejectDelivery
 openDispute
 resolveDispute
 releaseEscrow
@@ -248,7 +296,7 @@ Money rules:
 
 ---
 
-## 11. Dispute Security Rules
+## 12. Dispute Security Rules
 
 A dispute can only be opened by the buyer who owns the order item.
 
@@ -265,7 +313,7 @@ Dispute resolution must:
 
 ---
 
-## 12. Admin Security Rules
+## 13. Admin Security Rules
 
 Admin actions must be audited when they affect:
 
@@ -304,7 +352,7 @@ Manual wallet adjustments must require:
 
 ---
 
-## 13. File Upload Security Rules
+## 14. File Upload Security Rules
 
 Validate uploaded files.
 
@@ -335,7 +383,7 @@ Store file URLs or storage keys, not raw file content in normal database fields.
 
 ---
 
-## 14. Logging Rules
+## 15. Logging Rules
 
 Do not log:
 
@@ -359,7 +407,7 @@ Use application logs for technical errors.
 
 ---
 
-## 15. API Error Rules
+## 16. API Error Rules
 
 Errors must follow the standard API response format.
 
@@ -387,7 +435,7 @@ Example:
 
 ---
 
-## 16. Database Security Rules
+## 17. Database Security Rules
 
 Do not delete financial history.
 
@@ -404,6 +452,9 @@ Do not delete:
 Use transactions for:
 
 * Payment confirmation
+* Backend order initialization from frontend cart payloads
+* Delivery booking after seller readiness
+* Delivery provider webhook processing when order item state changes
 * Escrow release
 * Refunds
 * Dispute resolution
@@ -414,7 +465,7 @@ Use Prisma `select` to limit returned fields.
 
 ---
 
-## 17. Environment and Secrets Rules
+## 18. Environment and Secrets Rules
 
 Secrets must come from environment variables.
 
@@ -435,24 +486,29 @@ Environment variables must not be logged.
 
 ---
 
-## 18. Minimum Security Tests
+## 19. Minimum Security Tests
 
 Add tests for:
 
 * Unauthorized access returns 401.
 * Wrong role returns 403.
-* Users cannot access another user’s resources.
-* Seller cannot access another seller’s store/order item.
-* Buyer cannot confirm another buyer’s order item.
+* Users cannot access another user's resources.
+* Seller cannot access another seller's store/order item.
+* Buyer cannot confirm another buyer's order item.
+* Buyer cannot reject another buyer's order item.
+* Seller cannot mark another seller's order item ready for pickup.
+* Provider webhook cannot release escrow; release must come from buyer acceptance, auto-release, or admin resolution.
 * Invalid payment webhook signature is rejected.
+* Invalid delivery provider webhook signature is rejected.
 * Duplicate webhook does not duplicate ledger entries.
+* Duplicate delivery provider webhook does not duplicate delivery events or state transitions.
 * Disputed escrow cannot be released by auto-release.
 * Admin dispute resolution creates audit log.
 * Sensitive fields are excluded from responses.
 
 ---
 
-## 19. Final Rule
+## 20. Final Rule
 
 When security conflicts with convenience, choose security.
 

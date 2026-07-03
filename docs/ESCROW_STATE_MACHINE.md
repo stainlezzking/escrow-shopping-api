@@ -168,20 +168,66 @@ enum OrderItemStatus {
 | ------------------- | ----------------------------------------------------------------------- |
 | `PENDING_PAYMENT`   | Item exists but buyer payment has not been confirmed.                   |
 | `FUNDED`            | Payment for this item has been confirmed and escrow has been funded.    |
-| `AWAITING_DISPATCH` | Seller may now dispatch the item.                                       |
-| `DISPATCHED`        | Seller has marked item as shipped and uploaded dispatch evidence.       |
-| `DELIVERED`         | Item has been marked as delivered, if this event is tracked separately. |
+| `AWAITING_DISPATCH` | Seller may prepare the item and mark it ready for pickup or dispatch.   |
+| `DISPATCHED`        | Item has been picked up or dispatched with required evidence.           |
+| `DELIVERED`         | Delivery has reached the buyer, but buyer acceptance is still pending.  |
 | `CONFIRMED`         | Buyer has accepted delivery through the Digital Handshake.              |
 | `DISPUTED`          | Buyer has opened a dispute and funds are locked.                        |
 | `RELEASED`          | Funds have been released to seller wallet.                              |
 | `REFUNDED`          | Funds have been refunded to buyer wallet or approved refund route.      |
 | `CANCELLED`         | Item was cancelled before fulfilment.                                   |
 
-For MVP, `DELIVERED` may be skipped if the platform does not receive independent delivery confirmation. In that case, the flow can move from `DISPATCHED` to `CONFIRMED`, `DISPUTED`, or `RELEASED` by auto-release.
+Delivery provider movement should be tracked on `DeliveryShipment` and append-only `DeliveryEvent` records. Do not overload `OrderItemStatus` with every provider state such as rider assigned, in transit, or arrived.
+
+Provider delivery status is evidence only. It must never release escrow by itself.
 
 ---
 
-## 4.3 Escrow Status
+## 4.3 Delivery Shipment Status
+
+```ts
+enum DeliveryStatus {
+  PENDING
+  QUOTE_REQUESTED
+  QUOTE_ACCEPTED
+  BOOKED
+  PICKUP_PENDING
+  PICKED_UP
+  ARRIVED_AT_DESTINATION
+  DELIVERED_ACCEPTED
+  DELIVERED_REJECTED
+  RETURN_PENDING
+  RETURNED
+  FAILED
+  CANCELLED
+}
+```
+
+### Meaning
+
+| Status                    | Meaning                                                                 |
+| ------------------------- | ----------------------------------------------------------------------- |
+| `PENDING`                 | Delivery record exists but no provider booking has been made.           |
+| `QUOTE_REQUESTED`         | Delivery fee quote has been requested from a provider.                  |
+| `QUOTE_ACCEPTED`          | Quote has been selected for checkout/payment calculation.               |
+| `BOOKED`                  | Delivery has been booked after payment verification and seller readiness. |
+| `PICKUP_PENDING`          | Provider or seller-managed courier is expected to pick up the item.     |
+| `PICKED_UP`               | Item has been picked up or dispatched.                                  |
+| `ARRIVED_AT_DESTINATION`  | Provider indicates arrival at the buyer location, if supported.         |
+| `DELIVERED_ACCEPTED`      | Buyer accepted the item through Escrova confirmation.                   |
+| `DELIVERED_REJECTED`      | Buyer rejected the item through Escrova confirmation.                   |
+| `RETURN_PENDING`          | Return is required after rejection or dispute handling.                 |
+| `RETURNED`                | Item has been returned or return was resolved.                          |
+| `FAILED`                  | Delivery failed and requires review or rebooking.                       |
+| `CANCELLED`               | Delivery booking was cancelled.                                         |
+
+`DELIVERED_REJECTED` and `RETURN_PENDING` are separate states. Rejection records the buyer outcome; return pending records the operational next step.
+
+For MVP, `IN_TRANSIT` does not need to be a first-class internal status. Provider-specific movement statuses can be stored as `DeliveryEvent.providerStatus`.
+
+---
+
+## 4.4 Escrow Status
 
 ```ts
 enum EscrowStatus {
@@ -209,7 +255,7 @@ enum EscrowStatus {
 
 ---
 
-## 4.4 Payment Status
+## 4.5 Payment Status
 
 ```ts
 enum PaymentStatus {
@@ -237,7 +283,7 @@ Never mark a payment as `SUCCESS` based only on frontend confirmation.
 
 ---
 
-## 4.5 Dispute Status
+## 4.6 Dispute Status
 
 ```ts
 enum DisputeStatus {
@@ -265,7 +311,7 @@ enum DisputeStatus {
 
 ---
 
-## 4.6 Wallet Ledger Direction
+## 4.7 Wallet Ledger Direction
 
 ```ts
 enum LedgerDirection {
@@ -276,7 +322,7 @@ enum LedgerDirection {
 
 ---
 
-## 4.7 Wallet Ledger Type
+## 4.8 Wallet Ledger Type
 
 ```ts
 enum LedgerEntryType {
@@ -295,7 +341,7 @@ Manual adjustment must be admin-only and must always require an audit log reason
 
 ---
 
-## 4.8 Payout Status
+## 4.9 Payout Status
 
 ```ts
 enum PayoutStatus {
@@ -339,15 +385,18 @@ Escrow:     PENDING
 6. Parent order becomes `PAID`.
 7. Each order item becomes `FUNDED` or `AWAITING_DISPATCH`.
 8. Escrow records become `FUNDED` and then `HELD`.
-9. Seller dispatches item and uploads proof of dispatch.
-10. Order item becomes `DISPATCHED`.
-11. Safety timer starts.
-12. Buyer confirms delivery through button or OTP.
-13. Order item becomes `CONFIRMED`.
-14. Escrow releases funds to seller wallet.
-15. Platform commission is recorded.
-16. Order item becomes `RELEASED`.
-17. Parent order becomes `COMPLETED` when all items are closed.
+9. Seller marks the item as ready for pickup or seller-managed dispatch.
+10. Escrova books provider delivery where available, or records seller-managed delivery.
+11. Provider or seller-managed courier picks up/dispatches the item.
+12. Order item becomes `DISPATCHED`.
+13. Safety timer starts after dispatch/pickup evidence exists.
+14. Buyer inspects the item at delivery.
+15. Buyer accepts delivery through button, OTP, QR/token confirmation, or another approved Escrova confirmation method.
+16. Order item becomes `CONFIRMED`.
+17. Escrow releases funds to seller wallet.
+18. Platform commission is recorded.
+19. Order item becomes `RELEASED`.
+20. Parent order becomes `COMPLETED` when all items are closed.
 
 ---
 
@@ -375,8 +424,8 @@ Parent order status should usually be derived from order item statuses instead o
 | ------------------- | ------------------- | ---------------------------------------------- | ------------------- |
 | `PENDING_PAYMENT`   | `FUNDED`            | Payment verified                               | System              |
 | `FUNDED`            | `AWAITING_DISPATCH` | Escrow allocation created                      | System              |
-| `AWAITING_DISPATCH` | `DISPATCHED`        | Seller uploads dispatch evidence               | Seller              |
-| `DISPATCHED`        | `DELIVERED`         | Delivery marked if supported                   | Buyer/Seller/System |
+| `AWAITING_DISPATCH` | `DISPATCHED`        | Provider pickup or seller-managed dispatch evidence exists | Seller/System |
+| `DISPATCHED`        | `DELIVERED`         | Delivery arrival marked if supported           | System              |
 | `DISPATCHED`        | `CONFIRMED`         | Buyer confirms receipt                         | Buyer               |
 | `DELIVERED`         | `CONFIRMED`         | Buyer confirms receipt                         | Buyer               |
 | `DISPATCHED`        | `DISPUTED`          | Buyer opens dispute                            | Buyer               |
@@ -389,6 +438,10 @@ Parent order status should usually be derived from order item statuses instead o
 | `PENDING_PAYMENT`   | `CANCELLED`         | Order cancelled before payment                 | Buyer/System        |
 | `FUNDED`            | `REFUNDED`          | Valid cancellation/refund before dispatch      | Admin/System        |
 | `AWAITING_DISPATCH` | `REFUNDED`          | Seller fails to dispatch within allowed period | Admin/System        |
+
+Seller readiness should be captured on the delivery/shipment record, for example `readyForPickupAt`, instead of creating a separate `OrderItemStatus` for every preparation step.
+
+Provider events may update `DeliveryShipment.status` and append `DeliveryEvent` records. They must not directly move an order item to `CONFIRMED`, `RELEASED`, or `REFUNDED`.
 
 ---
 
@@ -439,6 +492,7 @@ Buyers may:
 * Pay for orders.
 * View their own orders.
 * Confirm delivery for their own order items.
+* Reject delivery for their own order items when the delivered item is wrong, damaged, missing, or materially different.
 * Open disputes for their own order items.
 * Upload dispute evidence.
 * Manage their own delivery addresses.
@@ -459,8 +513,9 @@ Buyers must not:
 Sellers may:
 
 * View order items assigned to their own store.
-* Dispatch their own order items after payment is confirmed.
-* Upload waybill or dispatch evidence.
+* Mark their own paid order items as ready for pickup.
+* Dispatch their own order items through seller-managed fallback flows after payment is confirmed.
+* Upload waybill or dispatch evidence where provider delivery is unavailable or evidence is required.
 * View escrow and wallet status for their own store.
 * View payout records for their own store.
 
@@ -468,6 +523,7 @@ Sellers must not:
 
 * Dispatch unpaid order items.
 * Dispatch another seller’s order item.
+* Book delivery for another seller’s order item.
 * Confirm buyer delivery on behalf of the buyer unless OTP verification is used.
 * Release their own funds manually.
 * Modify escrow status directly.
@@ -563,8 +619,11 @@ Rules:
 ```ts
 markOrderItemFunded(orderItemId: string)
 markOrderItemAwaitingDispatch(orderItemId: string)
+markOrderItemReadyForPickup(orderItemId: string, sellerId: string)
+bookDeliveryForReadyOrderItem(orderItemId: string)
 markOrderItemDispatched(orderItemId: string, sellerId: string, evidence: DispatchEvidence)
 confirmOrderItemDelivery(orderItemId: string, buyerId: string)
+rejectOrderItemDelivery(orderItemId: string, buyerId: string, reason: string, evidence?: Evidence)
 confirmOrderItemWithOtp(orderItemId: string, otp: string, sellerId: string)
 markOrderItemReleased(orderItemId: string)
 markOrderItemRefunded(orderItemId: string)
@@ -573,9 +632,12 @@ markOrderItemRefunded(orderItemId: string)
 Rules:
 
 * Seller must own the store attached to the order item.
+* Seller readiness can only be recorded after payment confirmation and escrow hold.
+* Provider delivery booking can only happen after seller readiness.
 * Seller cannot dispatch before payment confirmation.
-* Dispatch must include valid evidence.
+* Dispatch or provider pickup must include valid evidence.
 * Buyer confirmation must verify buyer ownership.
+* Buyer rejection must verify buyer ownership and should create a controlled return/dispute path.
 * OTP confirmation must validate code, expiry, and ownership.
 * Released and refunded order items are final.
 
@@ -740,12 +802,12 @@ Payout batch generation must not include escrow, disputed, or unavailable funds.
 
 ## 11. Safety Timer and Auto-Release
 
-The safety timer controls automatic release when the buyer is silent after dispatch.
+The safety timer controls automatic release when the buyer is silent after verified dispatch or pickup.
 
 Default assumption:
 
 ```txt
-Safety timer duration: 5 days after seller dispatch
+Safety timer duration: 5 days after seller-managed dispatch or provider pickup
 ```
 
 This should be configurable through platform settings.
@@ -754,7 +816,7 @@ The timer should start only when:
 
 1. Order item is paid.
 2. Escrow is held.
-3. Seller uploads dispatch evidence.
+3. Seller-managed dispatch evidence exists, or provider pickup evidence exists.
 4. Order item becomes `DISPATCHED`.
 
 Auto-release may happen when:
@@ -773,15 +835,15 @@ Auto-release must not happen when:
 * Order item is already released.
 * Order item is already refunded.
 * Payment was not verified.
-* Dispatch evidence is missing.
+* Dispatch or pickup evidence is missing.
 
 Auto-release processing must be idempotent.
 
 ---
 
-## 12. Dispatch Evidence Rules
+## 12. Delivery and Dispatch Evidence Rules
 
-Seller dispatch requires evidence.
+Dispatch and provider pickup require evidence.
 
 Evidence may include:
 
@@ -789,6 +851,10 @@ Evidence may include:
 * Courier receipt.
 * Tracking reference.
 * Delivery photo, where applicable.
+* Provider shipment reference.
+* Provider pickup event.
+* Provider delivery event.
+* Rider or courier note where available.
 
 Before moving an order item to `DISPATCHED`, validate:
 
@@ -796,17 +862,20 @@ Before moving an order item to `DISPATCHED`, validate:
 2. Order item is `AWAITING_DISPATCH`.
 3. Payment has been verified.
 4. Escrow is `HELD`.
-5. Evidence file or reference exists.
-6. Evidence file type is allowed.
-7. Evidence file size is within allowed limits.
+5. Seller has marked the item ready for pickup, unless this is a seller-managed dispatch fallback.
+6. Evidence file, provider pickup event, or tracking reference exists.
+7. Evidence file type is allowed when a file is uploaded.
+8. Evidence file size is within allowed limits when a file is uploaded.
 
 When dispatch is successful:
 
-1. Save evidence URL or storage key.
+1. Save evidence URL, storage key, provider event, or tracking reference.
 2. Save dispatch timestamp.
 3. Set `safetyTimerExpiresAt`.
 4. Move order item to `DISPATCHED`.
 5. Notify buyer.
+
+Provider webhooks may create delivery events and update delivery shipment status. They must not by themselves confirm delivery, release escrow, refund escrow, or resolve disputes.
 
 ---
 
@@ -825,11 +894,45 @@ Before confirmation:
 After confirmation:
 
 1. Mark order item as `CONFIRMED`.
-2. Release escrow to seller.
-3. Record platform commission.
-4. Mark order item as `RELEASED`.
-5. Update parent order status.
-6. Notify seller.
+2. Mark delivery shipment as `DELIVERED_ACCEPTED`, where a shipment record exists.
+3. Release escrow to seller.
+4. Record platform commission.
+5. Mark order item as `RELEASED`.
+6. Update parent order status.
+7. Notify seller.
+
+Provider delivery completion, rider notes, or webhook events are not buyer confirmation. They are evidence for the confirmation, auto-release, or dispute flow.
+
+## 13.1 Buyer Rejection Rules
+
+Buyer rejection records that the buyer did not accept the delivered item at handoff or inspection.
+
+Before rejection:
+
+1. Buyer must own the parent order.
+2. Order item must be `DISPATCHED` or `DELIVERED`.
+3. Escrow must be `HELD`.
+4. Escrow must not already be released or refunded.
+5. Rejection reason should be captured.
+6. Evidence should be captured where practical.
+
+After rejection:
+
+1. Mark delivery shipment as `DELIVERED_REJECTED`, where a shipment record exists.
+2. Open a controlled return or dispute path.
+3. Stop auto-release eligibility unless an admin later resolves for seller.
+4. Preserve provider delivery events and rejection evidence for review.
+5. Notify seller and admin where required.
+
+`DELIVERED_REJECTED` does not automatically mean the buyer wins a refund. It means the buyer has rejected delivery and the system must decide the return/dispute outcome.
+
+If return is required, move the shipment or dispute to `RETURN_PENDING`.
+
+Return fees may be temporarily reserved from held funds so the platform does not carry open-ended logistics cost. Final return-fee responsibility should be assigned by policy or dispute outcome:
+
+* Buyer pays when rejection is invalid or buyer-caused.
+* Seller pays when seller shipped the wrong, damaged, fake, or materially different item.
+* Provider/platform responsibility may apply if logistics failure caused the issue and the provider contract supports it.
 
 ---
 
@@ -852,9 +955,10 @@ After valid OTP confirmation:
 
 1. Mark OTP as used.
 2. Mark order item as `CONFIRMED`.
-3. Release escrow to seller.
-4. Create ledger entries.
-5. Notify buyer and seller.
+3. Mark delivery shipment as `DELIVERED_ACCEPTED`, where a shipment record exists.
+4. Release escrow to seller.
+5. Create ledger entries.
+6. Notify buyer and seller.
 
 Never store OTPs in plain text if persistence is required.
 
@@ -1043,20 +1147,22 @@ Notifications should be sent for important state changes.
 
 Recommended notification events:
 
-| Event                    | Recipient     |
-| ------------------------ | ------------- |
-| Payment confirmed        | Buyer, seller |
-| Seller dispatch required | Seller        |
-| Item dispatched          | Buyer         |
-| Safety timer started     | Buyer, seller |
-| Buyer confirmed delivery | Seller        |
-| Escrow released          | Seller        |
-| Dispute opened           | Seller, admin |
-| Dispute resolved         | Buyer, seller |
-| Refund issued            | Buyer         |
-| Payout batch generated   | Admin         |
-| Payout successful        | Seller        |
-| KYC approved/rejected    | Seller        |
+| Event                         | Recipient     |
+| ----------------------------- | ------------- |
+| Payment confirmed             | Buyer, seller |
+| Seller readiness required     | Seller        |
+| Delivery booked               | Buyer, seller |
+| Item dispatched or picked up  | Buyer         |
+| Safety timer started          | Buyer, seller |
+| Buyer accepted delivery       | Seller        |
+| Buyer rejected delivery       | Seller, admin |
+| Escrow released               | Seller        |
+| Dispute opened                | Seller, admin |
+| Dispute resolved              | Buyer, seller |
+| Refund issued                 | Buyer         |
+| Payout batch generated        | Admin         |
+| Payout successful             | Seller        |
+| KYC approved/rejected         | Seller        |
 
 Notification failure should not corrupt the financial transaction.
 
@@ -1176,9 +1282,11 @@ Codex must add or update tests when implementing these flows.
 
 * Seller cannot dispatch unpaid item.
 * Seller cannot dispatch another seller’s item.
-* Dispatch requires evidence.
-* Dispatch starts safety timer.
+* Seller readiness is required before provider booking.
+* Dispatch or provider pickup requires evidence.
+* Dispatch or provider pickup starts safety timer.
 * Buyer can confirm own delivered/dispatched item.
+* Buyer can reject own delivered/dispatched item.
 * Buyer cannot confirm another buyer’s item.
 * Released item cannot be disputed.
 * Refunded item cannot be released.

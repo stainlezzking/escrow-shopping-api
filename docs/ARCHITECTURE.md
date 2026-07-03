@@ -70,7 +70,7 @@ Responsibilities:
 | Service             | Business logic and orchestration                    |
 | Domain helper       | Pure state-machine or calculation logic             |
 | Prisma service      | Database access                                     |
-| Provider adapter    | Payment, file storage, email/SMS integrations       |
+| Provider adapter    | Payment, delivery, file storage, email/SMS integrations |
 
 Controllers must stay thin.
 
@@ -120,8 +120,8 @@ src/
     kyc/
     categories/
     products/
-    carts/
     orders/
+    deliveries/
     payments/
     escrow/
     wallets/
@@ -144,6 +144,9 @@ src/
       monnify/
     storage/
       storage-provider.interface.ts
+    deliveries/
+      delivery-provider.interface.ts
+      dellyman/
     messaging/
       notification-provider.interface.ts
 ```
@@ -263,11 +266,13 @@ Public product search must exclude hidden products and inactive/unverified selle
 
 Responsible for:
 
-* Buyer cart items
-* Cart sync
-* Quantity updates
-* Selected attributes
-* Cart validation before checkout
+* Frontend-owned cart state
+* Client-side quantity and selected attribute state
+* Passing checkout item IDs and quantities to the backend at order initialization
+
+Escrova does not persist cart items in PostgreSQL for the MVP. Cart state is convenience UI state and should live on the client until the buyer initializes checkout.
+
+The backend must not trust client-side calculations. When the buyer places an order or proceeds to checkout, the Orders module must retrieve current products, verify availability and seller visibility, calculate totals, snapshot prices, and create the parent order and order items.
 
 Cart is not financial truth. Order and payment records are.
 
@@ -280,6 +285,8 @@ Responsible for:
 * Order initialization
 * Order item creation
 * Checkout totals
+* Product availability validation
+* Price snapshotting
 * Shipping fee calculation
 * Service fee calculation
 * Buyer order views
@@ -290,7 +297,28 @@ Orders module should coordinate with Payments and Escrow, but wallet balance cha
 
 ---
 
-## 6.10 Payments Module
+## 6.10 Deliveries Module
+
+Responsible for:
+
+* Delivery quote requests
+* Delivery provider booking after seller readiness
+* Delivery provider abstraction
+* Provider webhook ingestion
+* Delivery event history
+* Internal delivery status mapping
+* Buyer delivery acceptance and rejection
+* Return flow coordination
+
+Escrova should support seller-managed delivery as a fallback, but the preferred direction is provider-coordinated delivery through an integration such as Dellyman where available.
+
+Delivery must not be booked immediately after payment verification. Payment verification should make the order item eligible for seller preparation. The seller must mark the item as ready for pickup before Escrova books or schedules provider delivery.
+
+Provider delivery status is evidence, not escrow release authority. Escrow release must still be triggered by buyer acceptance, valid OTP/confirmation, auto-release after the safety timer, or admin dispute resolution.
+
+---
+
+## 6.11 Payments Module
 
 Responsible for:
 
@@ -308,7 +336,7 @@ Provider-specific logic should live behind a payment provider interface.
 
 ---
 
-## 6.11 Escrow Module
+## 6.12 Escrow Module
 
 Responsible for:
 
@@ -325,7 +353,7 @@ Escrow transitions must follow `docs/ESCROW_STATE_MACHINE.md`.
 
 ---
 
-## 6.12 Wallets Module
+## 6.13 Wallets Module
 
 Responsible for:
 
@@ -343,7 +371,7 @@ Do not expose generic balance update endpoints.
 
 ---
 
-## 6.13 Disputes Module
+## 6.14 Disputes Module
 
 Responsible for:
 
@@ -360,7 +388,7 @@ Admin dispute resolution must create audit logs.
 
 ---
 
-## 6.14 Settlements Module
+## 6.15 Settlements Module
 
 Responsible for:
 
@@ -374,7 +402,7 @@ Payout generation should move eligible seller funds from available balance to pe
 
 ---
 
-## 6.15 Audit Logs Module
+## 6.16 Audit Logs Module
 
 Responsible for:
 
@@ -386,7 +414,7 @@ Audit logs should be append-only.
 
 ---
 
-## 6.16 Notifications Module
+## 6.17 Notifications Module
 
 Responsible for:
 
@@ -592,6 +620,7 @@ Examples:
 
 ```txt
 PaymentProvider
+DeliveryProviderAdapter
 StorageProvider
 NotificationProvider
 BankVerificationProvider
@@ -616,7 +645,7 @@ Use a storage abstraction for:
 
 * Product images
 * KYC documents
-* Dispatch evidence
+* Dispatch and delivery evidence
 * Dispute evidence
 * Return waybills
 
@@ -685,16 +714,18 @@ Build in this order:
 5. KYC submission and admin review
 6. Categories and business categories
 7. Products and product images
-8. Cart
+8. Frontend cart contract and backend order initialization
 9. Orders and order items
-10. Payment initialization and verification
-11. Escrow creation and hold
-12. Dispatch evidence
-13. Buyer confirmation
-14. Wallet release and ledger entries
-15. Disputes and admin resolution
-16. Payout batching
-17. Background jobs
+10. Delivery quote and provider abstraction
+11. Payment initialization and verification
+12. Seller ready-for-pickup and delivery booking
+13. Escrow creation and hold
+14. Dispatch/delivery evidence
+15. Buyer acceptance or rejection
+16. Wallet release and ledger entries
+17. Disputes, returns, and admin resolution
+18. Payout batching
+19. Background jobs
 
 ---
 

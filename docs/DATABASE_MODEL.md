@@ -14,10 +14,11 @@ The database model must support:
 * Seller KYC
 * Product listings
 * Categories
-* Cart and checkout
+* Frontend cart and backend checkout initialization
 * Parent orders
 * Order item-level escrow
 * Payment verification
+* Delivery provider quotes and shipments
 * Dispatch evidence
 * Buyer confirmation
 * Disputes
@@ -73,11 +74,13 @@ ProductImage
 ProductAttribute
 ProductCategory
 SellerShippingSetting
-CartItem
 Order
 OrderItem
 Payment
 EscrowTransaction
+DeliveryQuote
+DeliveryShipment
+DeliveryEvent
 DispatchEvidence
 DeliveryOtp
 Dispute
@@ -247,6 +250,32 @@ enum PaymentProvider {
   MONNIFY
   BANK_TRANSFER
   MANUAL
+}
+
+enum DeliveryProvider {
+  SELLER_MANAGED
+  DELLYMAN
+}
+
+enum DeliveryMethod {
+  SELLER_MANAGED
+  THIRD_PARTY_PROVIDER
+}
+
+enum DeliveryStatus {
+  PENDING
+  QUOTE_REQUESTED
+  QUOTE_ACCEPTED
+  BOOKED
+  PICKUP_PENDING
+  PICKED_UP
+  ARRIVED_AT_DESTINATION
+  DELIVERED_ACCEPTED
+  DELIVERED_REJECTED
+  RETURN_PENDING
+  RETURNED
+  FAILED
+  CANCELLED
 }
 
 enum WalletOwnerType {
@@ -731,7 +760,6 @@ Product belongs to SellerProfile
 Product has many ProductImages
 Product has many ProductAttributes
 Product has many ProductCategory records
-Product has many CartItems
 Product has many OrderItems
 Product has many ProductReviews
 ```
@@ -837,7 +865,9 @@ categoryId index
 
 ### SellerShippingSetting
 
-Represents seller-defined shipping prices by destination state.
+Represents seller-defined shipping prices by destination state for seller-managed delivery fallback flows.
+
+Provider delivery quotes should not rely on this table. Third-party provider fees should be stored as quote and shipment snapshots.
 
 Recommended fields:
 
@@ -860,33 +890,24 @@ destinationState index
 
 ---
 
-## 7.4 Cart and Checkout
+## 7.4 Frontend Cart and Checkout
 
-### CartItem
+### Frontend Cart
 
-Represents a buyer’s pending shopping item.
+Escrova does not persist buyer cart items in PostgreSQL for MVP.
 
-Recommended fields:
+Cart state is frontend convenience state. The client may store selected product IDs, quantities, and selected attributes locally. When the buyer proceeds to checkout or places an order, the client sends the selected product IDs and quantities to the backend.
 
-```txt id="9oq6yv"
-id
-buyerProfileId
-productId
-quantity
-selectedAttributes
-createdAt
-updatedAt
-```
+The backend must then:
 
-Recommended constraints:
+1. Fetch current product records.
+2. Validate product existence.
+3. Validate product visibility and seller KYC/store status.
+4. Validate stock availability.
+5. Recalculate product totals, service fees, and delivery fees.
+6. Snapshot prices and fees into `Order` and `OrderItem`.
 
-```txt id="yao1kr"
-buyerProfileId index
-productId index
-buyerProfileId + productId unique if duplicate cart lines are not allowed
-```
-
-`selectedAttributes` may be JSON if variant support is flexible.
+Client-side cart totals are display hints only and must not be trusted as financial truth.
 
 ---
 
@@ -976,6 +997,7 @@ OrderItem belongs to Order
 OrderItem belongs to Product
 OrderItem belongs to SellerProfile
 OrderItem has one EscrowTransaction
+OrderItem may have one DeliveryShipment
 OrderItem has many DispatchEvidence records
 OrderItem may have one DeliveryOtp
 OrderItem may have many Disputes
@@ -1000,6 +1022,140 @@ Rules:
 * Seller release should happen per order item.
 * Released and refunded items are terminal.
 * `unitPriceAtCheckoutKobo` must be a snapshot and should not change if the product price later changes.
+* Delivery provider status must not directly release escrow.
+
+---
+
+### DeliveryQuote
+
+Represents a provider delivery quote calculated before payment.
+
+Recommended fields:
+
+```txt id="delivery_quote_fields"
+id
+buyerProfileId
+provider
+pickupState
+pickupAddress
+dropoffState
+dropoffAddress
+quotedFeeKobo
+estimatedPickupAt
+estimatedDeliveryAt
+providerQuoteReference
+expiresAt
+metadata
+createdAt
+```
+
+Recommended constraints:
+
+```txt id="delivery_quote_constraints"
+buyerProfileId index
+provider index
+providerQuoteReference index
+expiresAt index
+createdAt index
+```
+
+Rules:
+
+* Quotes are not financial truth until snapshotted into an order.
+* The backend must recalculate or validate delivery fees before order/payment initialization.
+* Quote metadata must not expose provider secrets.
+
+---
+
+### DeliveryShipment
+
+Represents delivery execution for an order item.
+
+Recommended fields:
+
+```txt id="delivery_shipment_fields"
+id
+orderItemId
+provider
+method
+status
+providerShipmentReference
+trackingReference
+deliveryFeeKobo
+pickupAddressSnapshot
+dropoffAddressSnapshot
+readyForPickupAt
+bookedAt
+pickedUpAt
+arrivedAtDestinationAt
+acceptedAt
+rejectedAt
+returnedAt
+failedAt
+cancelledAt
+metadata
+createdAt
+updatedAt
+```
+
+Recommended constraints:
+
+```txt id="delivery_shipment_constraints"
+orderItemId unique
+provider index
+method index
+status index
+providerShipmentReference index
+trackingReference index
+createdAt index
+```
+
+Rules:
+
+* Provider booking should happen after payment verification and seller readiness.
+* Seller readiness should be explicit, such as `markOrderItemReadyForPickup`.
+* Provider status is evidence, not escrow release authority.
+* Buyer acceptance should move delivery toward `DELIVERED_ACCEPTED`.
+* Buyer rejection should move delivery toward `DELIVERED_REJECTED` and then the return/dispute flow.
+* Return fees may be temporarily reserved from held funds, but final responsibility should be assigned by policy or dispute outcome.
+
+---
+
+### DeliveryEvent
+
+Represents append-only delivery events from providers and internal delivery workflows.
+
+Recommended fields:
+
+```txt id="delivery_event_fields"
+id
+deliveryShipmentId
+provider
+providerEventId
+providerStatus
+internalStatus
+eventPayload
+occurredAt
+createdAt
+```
+
+Recommended constraints:
+
+```txt id="delivery_event_constraints"
+deliveryShipmentId index
+provider index
+provider + providerEventId unique nullable where provider supplies stable event IDs
+internalStatus index
+occurredAt index
+createdAt index
+```
+
+Rules:
+
+* Delivery events should be append-only.
+* Provider webhooks must be idempotent.
+* Raw provider payloads should be stored carefully and not exposed directly to normal users.
+* Provider-specific statuses such as in-transit, assigned, or rider-arrived can be preserved here even if they do not become first-class internal states.
 
 ---
 
@@ -1102,7 +1258,7 @@ Rules:
 
 ### DispatchEvidence
 
-Represents proof that seller dispatched an order item.
+Represents proof that an order item was dispatched or handled by a delivery provider.
 
 Recommended fields:
 
@@ -1135,6 +1291,7 @@ Rules:
 * Dispatch evidence is required before an item can become `DISPATCHED`.
 * Evidence should be protected from unauthorized access.
 * Evidence may be used in disputes.
+* In provider delivery flows, proof of pickup, proof of delivery, provider tracking events, and rider notes may also be stored or linked as evidence.
 
 ---
 
@@ -1599,6 +1756,32 @@ enum PaymentProvider {
   MANUAL
 }
 
+enum DeliveryProvider {
+  SELLER_MANAGED
+  DELLYMAN
+}
+
+enum DeliveryMethod {
+  SELLER_MANAGED
+  THIRD_PARTY_PROVIDER
+}
+
+enum DeliveryStatus {
+  PENDING
+  QUOTE_REQUESTED
+  QUOTE_ACCEPTED
+  BOOKED
+  PICKUP_PENDING
+  PICKED_UP
+  ARRIVED_AT_DESTINATION
+  DELIVERED_ACCEPTED
+  DELIVERED_REJECTED
+  RETURN_PENDING
+  RETURNED
+  FAILED
+  CANCELLED
+}
+
 enum WalletOwnerType {
   BUYER
   SELLER
@@ -1680,6 +1863,7 @@ model BuyerProfile {
   wallet    Wallet?
   addresses BuyerAddress[]
   orders    Order[]
+  deliveryQuotes DeliveryQuote[]
   reviews   ProductReview[]
 
   @@index([status])
@@ -1839,7 +2023,6 @@ model Product {
   images        ProductImage[]
   attributes    ProductAttribute[]
   categories    ProductCategory[]
-  cartItems     CartItem[]
   orderItems    OrderItem[]
   reviews       ProductReview[]
 
@@ -1912,22 +2095,6 @@ model SellerShippingSetting {
   @@index([destinationState])
 }
 
-model CartItem {
-  id                 String   @id @default(uuid())
-  buyerProfileId     String
-  productId          String
-  quantity           Int
-  selectedAttributes Json?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
-
-  buyerProfile BuyerProfile @relation(fields: [buyerProfileId], references: [id])
-  product      Product      @relation(fields: [productId], references: [id])
-
-  @@index([buyerProfileId])
-  @@index([productId])
-}
-
 model Order {
   id                     String      @id @default(uuid())
   buyerProfileId          String
@@ -1978,6 +2145,7 @@ model OrderItem {
   product       Product           @relation(fields: [productId], references: [id])
   sellerProfile SellerProfile     @relation(fields: [sellerProfileId], references: [id])
   escrow        EscrowTransaction?
+  deliveryShipment DeliveryShipment?
   dispatchEvidence DispatchEvidence[]
   deliveryOtp   DeliveryOtp?
   disputes      Dispute[]
@@ -1989,6 +2157,87 @@ model OrderItem {
   @@index([status])
   @@index([safetyTimerExpiresAt])
   @@index([createdAt])
+}
+
+model DeliveryQuote {
+  id                       String           @id @default(uuid())
+  buyerProfileId            String
+  provider                 DeliveryProvider
+  pickupState              String?
+  pickupAddress            String?
+  dropoffState             String
+  dropoffAddress           String
+  quotedFeeKobo            BigInt
+  estimatedPickupAt        DateTime?
+  estimatedDeliveryAt      DateTime?
+  providerQuoteReference   String?
+  expiresAt                DateTime?
+  metadata                 Json?
+  createdAt                DateTime         @default(now())
+
+  buyerProfile BuyerProfile @relation(fields: [buyerProfileId], references: [id])
+
+  @@index([buyerProfileId])
+  @@index([provider])
+  @@index([providerQuoteReference])
+  @@index([expiresAt])
+}
+
+model DeliveryShipment {
+  id                          String           @id @default(uuid())
+  orderItemId                  String           @unique
+  provider                    DeliveryProvider
+  method                      DeliveryMethod
+  status                      DeliveryStatus   @default(PENDING)
+  providerShipmentReference   String?
+  trackingReference           String?
+  deliveryFeeKobo             BigInt
+  pickupAddressSnapshot       Json?
+  dropoffAddressSnapshot      Json?
+  readyForPickupAt            DateTime?
+  bookedAt                    DateTime?
+  pickedUpAt                  DateTime?
+  arrivedAtDestinationAt      DateTime?
+  acceptedAt                  DateTime?
+  rejectedAt                  DateTime?
+  returnedAt                  DateTime?
+  failedAt                    DateTime?
+  cancelledAt                 DateTime?
+  metadata                    Json?
+  createdAt                   DateTime         @default(now())
+  updatedAt                   DateTime         @updatedAt
+
+  orderItem OrderItem       @relation(fields: [orderItemId], references: [id])
+  events    DeliveryEvent[]
+
+  @@index([provider])
+  @@index([method])
+  @@index([status])
+  @@index([providerShipmentReference])
+  @@index([trackingReference])
+  @@index([readyForPickupAt])
+  @@index([createdAt])
+}
+
+model DeliveryEvent {
+  id                  String           @id @default(uuid())
+  deliveryShipmentId  String
+  provider            DeliveryProvider
+  providerEventId     String?
+  providerStatus      String?
+  internalStatus      DeliveryStatus?
+  occurredAt          DateTime?
+  payload             Json?
+  createdAt           DateTime         @default(now())
+
+  deliveryShipment DeliveryShipment @relation(fields: [deliveryShipmentId], references: [id])
+
+  @@index([deliveryShipmentId])
+  @@index([provider])
+  @@index([providerEventId])
+  @@index([internalStatus])
+  @@index([occurredAt])
+  @@unique([provider, providerEventId])
 }
 
 model Payment {
@@ -2345,6 +2594,8 @@ BuyerProfile 1 -> many ProductReviews
 Order 1 -> many OrderItems
 Order 1 -> many Payments
 OrderItem 1 -> 1 EscrowTransaction
+OrderItem 1 -> 0/1 DeliveryShipment
+DeliveryShipment 1 -> many DeliveryEvents
 OrderItem 1 -> many DispatchEvidence
 OrderItem 1 -> 0/1 DeliveryOtp
 OrderItem 1 -> many Disputes
@@ -2385,6 +2636,8 @@ Order.orderReference
 EscrowTransaction.orderItemId
 EscrowTransaction.escrowReference
 DeliveryOtp.orderItemId
+DeliveryShipment.orderItemId
+DeliveryEvent.provider + providerEventId where provider supplies stable event IDs
 Product.sellerProfileId + Product.slug
 ProductCategory.productId + ProductCategory.categoryId
 SellerShippingSetting.sellerProfileId + SellerShippingSetting.destinationState
@@ -2412,6 +2665,8 @@ orderItemId fields
 payment references
 escrow references
 payout batch references
+delivery shipment references
+delivery provider event references
 safetyTimerExpiresAt
 storeHandle
 product slug
@@ -2441,6 +2696,8 @@ Orders
 OrderItems
 Payments
 EscrowTransactions
+DeliveryShipments
+DeliveryEvents
 Wallets
 WalletLedgerEntries
 Disputes
@@ -2461,10 +2718,15 @@ Required transaction flows:
 
 ```txt id="llieoc"
 Payment success processing
+Order initialization
+Delivery booking after seller readiness
+Provider delivery webhook processing where order item state changes
 Creating escrow records
 Holding escrow funds
 Releasing escrow to seller
 Refunding buyer
+Buyer delivery acceptance
+Buyer delivery rejection and return initiation
 Opening a dispute
 Resolving a dispute
 Generating payout batches
@@ -2543,9 +2805,11 @@ BusinessCategory
 Category
 Product
 ProductImage
-CartItem
 Order
 OrderItem
+DeliveryQuote
+DeliveryShipment
+DeliveryEvent
 Payment
 EscrowTransaction
 DispatchEvidence
