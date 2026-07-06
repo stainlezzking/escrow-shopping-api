@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/unbound-method */
-import { OrderItemStatus, UserRole } from '@prisma/client';
+import { EscrowStatus, OrderItemStatus, UserRole } from '@prisma/client';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
 
@@ -7,6 +7,7 @@ describe('OrdersController', () => {
   const service = {
     initializeOrder: jest.fn(),
     dispatchOrderItem: jest.fn(),
+    confirmOrderItemDelivery: jest.fn(),
   } as unknown as jest.Mocked<OrdersService>;
 
   beforeEach(() => {
@@ -86,6 +87,40 @@ describe('OrdersController', () => {
       {
         trackingReference: 'TRK-001',
       },
+    );
+  });
+
+  it('delegates buyer delivery confirmation to the service', async () => {
+    const releasedAt = new Date('2026-06-29T10:00:00.000Z');
+    service.confirmOrderItemDelivery.mockResolvedValue({
+      orderId: '550e8400-e29b-41d4-a716-446655440000',
+      orderItemId: '650e8400-e29b-41d4-a716-446655440000',
+      escrowId: '750e8400-e29b-41d4-a716-446655440000',
+      orderItemStatus: OrderItemStatus.RELEASED,
+      escrowStatus: EscrowStatus.RELEASED,
+      sellerNetAmountKobo: '20000',
+      platformFeeKobo: '1000',
+      confirmedAt: releasedAt,
+      releasedAt,
+    });
+    const controller = new OrdersController(service);
+
+    await controller.confirmOrderItemDelivery(
+      {
+        sub: 'buyer_user',
+        email: 'buyer@example.com',
+        role: UserRole.BUYER,
+      },
+      {
+        orderId: '550e8400-e29b-41d4-a716-446655440000',
+        itemId: '650e8400-e29b-41d4-a716-446655440000',
+      },
+    );
+
+    expect(service.confirmOrderItemDelivery).toHaveBeenCalledWith(
+      'buyer_user',
+      '550e8400-e29b-41d4-a716-446655440000',
+      '650e8400-e29b-41d4-a716-446655440000',
     );
   });
 });

@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import {
   AccountStatus,
+  DisputeStatus,
   EscrowStatus,
   KycStatus,
   OrderItemStatus,
@@ -16,6 +17,8 @@ import {
   StoreStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
+import { EscrowService } from '../escrow/escrow.service';
+import { EscrowReleaseResponseDto } from '../escrow/dto/escrow-release-response.dto';
 import { DispatchOrderItemInput } from './dto/dispatch-order-item.dto';
 import { DispatchOrderItemResponseDto } from './dto/dispatch-response.dto';
 import { InitializeOrderInput } from './dto/initialize-order.dto';
@@ -27,6 +30,12 @@ const BASIS_POINTS_DIVISOR = BigInt(10_000);
 const SAFETY_TIMER_SETTING_KEY = 'order_item_safety_timer_days';
 const DEFAULT_SAFETY_TIMER_DAYS = 5;
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+const activeDisputeStatuses = [
+  DisputeStatus.OPEN,
+  DisputeStatus.UNDER_REVIEW,
+  DisputeStatus.AWAITING_BUYER_RETURN,
+  DisputeStatus.RETURN_IN_TRANSIT,
+];
 
 const orderInclude = {
   items: {
@@ -87,7 +96,10 @@ interface DispatchEvidenceLike {
 export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly escrowService: EscrowService,
+  ) {}
 
   /**
    * Creates a parent order and pending-payment order items from client data.
@@ -260,6 +272,91 @@ export class OrdersService {
       result.orderItem.safetyTimerExpiresAt,
       result.evidence,
     );
+  }
+
+  /**
+   * Confirms buyer acceptance for an owned order item and releases escrow.
+   *
+   * @param userId - Authenticated buyer user ID.
+   * @param orderId - Parent order ID.
+   * @param itemId - Order item being confirmed.
+   * @returns Escrow release result after seller funds are released.
+   * @throws NotFoundException when the order item is missing.
+   * @throws ForbiddenException when the buyer does not own the parent order.
+   * @throws UnprocessableEntityException when item or escrow state disallows confirmation.
+   */
+  async confirmOrderItemDelivery(
+    userId: string,
+    orderId: string,
+    itemId: string,
+  ): Promise<EscrowReleaseResponseDto> {
+    const orderItem = await this.prisma.orderItem.findFirst({
+      where: { id: itemId, orderId },
+      include: {
+        escrow: true,
+        order: { include: { buyerProfile: true } },
+        disputes: {
+          where: { status: { in: activeDisputeStatuses } },
+          take: 1,
+        },
+      },
+    });
+
+    if (!orderItem) {
+      throw new NotFoundException('Order item not found');
+    }
+
+    if (orderItem.order.buyerProfile.userId !== userId) {
+      throw new ForbiddenException(
+        'You are not allowed to confirm this order item',
+      );
+    }
+
+    if (
+      orderItem.status === OrderItemStatus.DISPUTED ||
+      orderItem.status === OrderItemStatus.RELEASED ||
+      orderItem.status === OrderItemStatus.REFUNDED ||
+      orderItem.status === OrderItemStatus.CANCELLED
+    ) {
+      throw new UnprocessableEntityException(
+        'Order item cannot be confirmed from its current state',
+      );
+    }
+
+    if (
+      orderItem.status !== OrderItemStatus.DISPATCHED &&
+      orderItem.status !== OrderItemStatus.DELIVERED
+    ) {
+      throw new UnprocessableEntityException(
+        'Only dispatched or delivered order items can be confirmed',
+      );
+    }
+
+    if (!orderItem.escrow || orderItem.escrow.status !== EscrowStatus.HELD) {
+      throw new UnprocessableEntityException('Order item escrow is not held');
+    }
+
+    if (orderItem.escrow.releasedAt || orderItem.escrow.refundedAt) {
+      throw new UnprocessableEntityException(
+        'Order item escrow is already closed',
+      );
+    }
+
+    if (orderItem.disputes.length > 0) {
+      throw new UnprocessableEntityException(
+        'Disputed order items cannot be confirmed',
+      );
+    }
+
+    const release = await this.escrowService.releaseEscrowToSeller({
+      orderItemId: itemId,
+      reason: 'BUYER_CONFIRMATION',
+      requireBuyerConfirmationState: true,
+    });
+
+    this.logger.log(`Buyer ${userId} confirmed order item ${itemId}`);
+
+    return release;
   }
 
   private aggregateItems(

@@ -19,6 +19,7 @@ import {
   StoreStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
+import { EscrowService } from '../escrow/escrow.service';
 import { OrdersService } from './orders.service';
 
 describe('OrdersService', () => {
@@ -103,6 +104,7 @@ describe('OrdersService', () => {
     platformSetting: { findUnique: jest.Mock };
   };
   let prisma: jest.Mocked<PrismaService>;
+  let escrowService: jest.Mocked<EscrowService>;
   let service: OrdersService;
 
   beforeEach(() => {
@@ -133,10 +135,27 @@ describe('OrdersService', () => {
       order: {
         create: jest.fn(),
       },
+      orderItem: {
+        findFirst: jest.fn(),
+      },
       $transaction: jest.fn(async (callback) => callback(tx)),
     } as unknown as jest.Mocked<PrismaService>;
 
-    service = new OrdersService(prisma);
+    escrowService = {
+      releaseEscrowToSeller: jest.fn().mockResolvedValue({
+        orderId: 'order_one',
+        orderItemId: 'order_item_one',
+        escrowId: 'escrow_one',
+        orderItemStatus: OrderItemStatus.RELEASED,
+        escrowStatus: EscrowStatus.RELEASED,
+        sellerNetAmountKobo: '20000',
+        platformFeeKobo: '1000',
+        confirmedAt: new Date('2026-06-29T10:00:00.000Z'),
+        releasedAt: new Date('2026-06-29T10:00:00.000Z'),
+      }),
+    } as unknown as jest.Mocked<EscrowService>;
+
+    service = new OrdersService(prisma, escrowService);
   });
 
   afterEach(() => {
@@ -411,5 +430,185 @@ describe('OrdersService', () => {
         trackingReference: 'TRK-001',
       }),
     ).rejects.toBeInstanceOf(UnprocessableEntityException);
+  });
+
+  it('confirms buyer-owned dispatched order item and triggers escrow release', async () => {
+    prisma.orderItem.findFirst.mockResolvedValue({
+      id: 'order_item_one',
+      orderId: 'order_one',
+      sellerProfileId: 'store_one',
+      status: OrderItemStatus.DISPATCHED,
+      escrow: {
+        id: 'escrow_one',
+        status: EscrowStatus.HELD,
+        releasedAt: null,
+        refundedAt: null,
+      },
+      order: {
+        id: 'order_one',
+        buyerProfile: { id: 'buyer_profile_one', userId: 'buyer_user' },
+      },
+      disputes: [],
+    });
+
+    const result = await service.confirmOrderItemDelivery(
+      'buyer_user',
+      'order_one',
+      'order_item_one',
+    );
+
+    expect(prisma.orderItem.findFirst).toHaveBeenCalledWith({
+      where: { id: 'order_item_one', orderId: 'order_one' },
+      include: expect.any(Object),
+    });
+    expect(escrowService.releaseEscrowToSeller).toHaveBeenCalledWith({
+      orderItemId: 'order_item_one',
+      reason: 'BUYER_CONFIRMATION',
+      requireBuyerConfirmationState: true,
+    });
+    expect(result.orderItemStatus).toBe(OrderItemStatus.RELEASED);
+    expect(result.escrowStatus).toBe(EscrowStatus.RELEASED);
+  });
+
+  it('rejects buyer confirmation for an order item owned by another buyer', async () => {
+    prisma.orderItem.findFirst.mockResolvedValue({
+      id: 'order_item_one',
+      orderId: 'order_one',
+      status: OrderItemStatus.DISPATCHED,
+      escrow: {
+        id: 'escrow_one',
+        status: EscrowStatus.HELD,
+        releasedAt: null,
+        refundedAt: null,
+      },
+      order: {
+        buyerProfile: { id: 'buyer_profile_one', userId: 'other_buyer' },
+      },
+      disputes: [],
+    });
+
+    await expect(
+      service.confirmOrderItemDelivery(
+        'buyer_user',
+        'order_one',
+        'order_item_one',
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(escrowService.releaseEscrowToSeller).not.toHaveBeenCalled();
+  });
+
+  it('rejects buyer confirmation when item is not dispatched or delivered', async () => {
+    prisma.orderItem.findFirst.mockResolvedValue({
+      id: 'order_item_one',
+      orderId: 'order_one',
+      status: OrderItemStatus.AWAITING_DISPATCH,
+      escrow: {
+        id: 'escrow_one',
+        status: EscrowStatus.HELD,
+        releasedAt: null,
+        refundedAt: null,
+      },
+      order: {
+        buyerProfile: { id: 'buyer_profile_one', userId: 'buyer_user' },
+      },
+      disputes: [],
+    });
+
+    await expect(
+      service.confirmOrderItemDelivery(
+        'buyer_user',
+        'order_one',
+        'order_item_one',
+      ),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+    expect(escrowService.releaseEscrowToSeller).not.toHaveBeenCalled();
+  });
+
+  it('rejects buyer confirmation for released, refunded, or disputed items', async () => {
+    for (const status of [
+      OrderItemStatus.DISPUTED,
+      OrderItemStatus.RELEASED,
+      OrderItemStatus.REFUNDED,
+    ]) {
+      prisma.orderItem.findFirst.mockResolvedValueOnce({
+        id: 'order_item_one',
+        orderId: 'order_one',
+        status,
+        escrow: {
+          id: 'escrow_one',
+          status: EscrowStatus.HELD,
+          releasedAt: null,
+          refundedAt: null,
+        },
+        order: {
+          buyerProfile: { id: 'buyer_profile_one', userId: 'buyer_user' },
+        },
+        disputes: [],
+      });
+
+      await expect(
+        service.confirmOrderItemDelivery(
+          'buyer_user',
+          'order_one',
+          'order_item_one',
+        ),
+      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+    }
+
+    expect(escrowService.releaseEscrowToSeller).not.toHaveBeenCalled();
+  });
+
+  it('rejects buyer confirmation when escrow is not held', async () => {
+    prisma.orderItem.findFirst.mockResolvedValue({
+      id: 'order_item_one',
+      orderId: 'order_one',
+      status: OrderItemStatus.DISPATCHED,
+      escrow: {
+        id: 'escrow_one',
+        status: EscrowStatus.RELEASED,
+        releasedAt: new Date('2026-06-29T10:00:00.000Z'),
+        refundedAt: null,
+      },
+      order: {
+        buyerProfile: { id: 'buyer_profile_one', userId: 'buyer_user' },
+      },
+      disputes: [],
+    });
+
+    await expect(
+      service.confirmOrderItemDelivery(
+        'buyer_user',
+        'order_one',
+        'order_item_one',
+      ),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+    expect(escrowService.releaseEscrowToSeller).not.toHaveBeenCalled();
+  });
+
+  it('rejects buyer confirmation when an active dispute exists', async () => {
+    prisma.orderItem.findFirst.mockResolvedValue({
+      id: 'order_item_one',
+      orderId: 'order_one',
+      status: OrderItemStatus.DISPATCHED,
+      escrow: {
+        id: 'escrow_one',
+        status: EscrowStatus.HELD,
+        releasedAt: null,
+        refundedAt: null,
+      },
+      order: {
+        buyerProfile: { id: 'buyer_profile_one', userId: 'buyer_user' },
+      },
+      disputes: [{ id: 'dispute_one' }],
+    });
+
+    await expect(
+      service.confirmOrderItemDelivery(
+        'buyer_user',
+        'order_one',
+        'order_item_one',
+      ),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+    expect(escrowService.releaseEscrowToSeller).not.toHaveBeenCalled();
   });
 });

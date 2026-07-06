@@ -5,6 +5,7 @@ import {
   ApiCreatedResponse,
   ApiForbiddenResponse,
   ApiNotFoundResponse,
+  ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiTags,
@@ -18,6 +19,9 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user';
+import { EscrowReleaseResponseDto } from '../escrow/dto/escrow-release-response.dto';
+import { ConfirmOrderItemParamsSchema } from './dto/confirm-order-item.dto';
+import type { ConfirmOrderItemParamsInput } from './dto/confirm-order-item.dto';
 import {
   DispatchOrderItemDto,
   DispatchOrderItemParamsSchema,
@@ -96,6 +100,35 @@ export class OrdersController {
       params.orderId,
       params.itemId,
       dto,
+    );
+  }
+
+  /**
+   * Confirms buyer delivery acceptance and releases escrow to seller.
+   */
+  @Post(':orderId/items/:itemId/confirm-delivery')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.BUYER)
+  @ApiOperation({ summary: 'Confirm buyer delivery acceptance' })
+  @ApiParam({ name: 'orderId', description: 'Parent order ID' })
+  @ApiParam({ name: 'itemId', description: 'Order item ID' })
+  @ApiOkResponse({ type: EscrowReleaseResponseDto })
+  @ApiUnauthorizedResponse({ description: 'Authentication required' })
+  @ApiForbiddenResponse({ description: 'Buyer ownership required' })
+  @ApiNotFoundResponse({ description: 'Order item not found' })
+  @ApiUnprocessableEntityResponse({
+    description: 'Order item or escrow state does not allow confirmation',
+  })
+  confirmOrderItemDelivery(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param(new ZodValidationPipe(ConfirmOrderItemParamsSchema))
+    params: ConfirmOrderItemParamsInput,
+  ): Promise<EscrowReleaseResponseDto> {
+    return this.ordersService.confirmOrderItemDelivery(
+      user.sub,
+      params.orderId,
+      params.itemId,
     );
   }
 }
