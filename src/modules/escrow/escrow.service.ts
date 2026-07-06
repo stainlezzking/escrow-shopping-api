@@ -17,6 +17,7 @@ import {
   WalletStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
+import { EscrowRefundResponseDto } from './dto/escrow-refund-response.dto';
 import { EscrowReleaseResponseDto } from './dto/escrow-release-response.dto';
 
 type EscrowTransactionClient = Prisma.TransactionClient;
@@ -43,6 +44,13 @@ export interface ReleaseEscrowToSellerInput {
   orderItemId: string;
   reason: string;
   requireBuyerConfirmationState?: boolean;
+  allowDisputedRelease?: boolean;
+}
+
+export interface RefundEscrowToBuyerInput {
+  orderItemId: string;
+  reason: string;
+  allowDisputedRefund?: boolean;
 }
 
 /**
@@ -112,7 +120,7 @@ export class EscrowService {
 
       this.assertReleaseEligible(
         { status: orderItem.status, escrow, disputes: orderItem.disputes },
-        input.requireBuyerConfirmationState,
+        input,
       );
 
       const sellerWallet = orderItem.sellerProfile.wallet;
@@ -215,6 +223,142 @@ export class EscrowService {
     };
   }
 
+  /**
+   * Refunds escrow funds to the buyer wallet.
+   *
+   * @param input - Order item and refund reason metadata.
+   * @returns Public-safe refund result.
+   * @throws NotFoundException when the order item, wallet, or escrow record is missing.
+   * @throws UnprocessableEntityException when escrow is not eligible for refund.
+   */
+  async refundEscrowToBuyer(
+    input: RefundEscrowToBuyerInput,
+  ): Promise<EscrowRefundResponseDto> {
+    const result = await this.prisma.$transaction(async (tx) => {
+      const orderItem = await tx.orderItem.findUnique({
+        where: { id: input.orderItemId },
+        include: {
+          escrow: true,
+          order: {
+            include: {
+              buyerProfile: { include: { wallet: true } },
+            },
+          },
+          disputes: {
+            where: { status: { in: activeDisputeStatuses } },
+            take: 1,
+          },
+        },
+      });
+
+      if (!orderItem) {
+        throw new NotFoundException('Order item not found');
+      }
+
+      if (!orderItem.escrow) {
+        throw new UnprocessableEntityException('Order item escrow not found');
+      }
+      const escrow = orderItem.escrow;
+
+      if (
+        orderItem.status === OrderItemStatus.REFUNDED &&
+        escrow.status === EscrowStatus.REFUNDED &&
+        orderItem.refundedAt &&
+        escrow.refundedAt
+      ) {
+        return {
+          orderId: orderItem.orderId,
+          orderItemId: orderItem.id,
+          escrowId: escrow.id,
+          orderItemStatus: orderItem.status,
+          escrowStatus: escrow.status,
+          refundAmountKobo: escrow.grossAmountKobo,
+          refundedAt: orderItem.refundedAt,
+        };
+      }
+
+      this.assertRefundEligible(
+        { status: orderItem.status, escrow, disputes: orderItem.disputes },
+        input,
+      );
+
+      const buyerWallet = orderItem.order.buyerProfile.wallet;
+      if (!buyerWallet || buyerWallet.status !== WalletStatus.ACTIVE) {
+        throw new NotFoundException('Buyer wallet not found');
+      }
+
+      const platformWallet = await this.getActivePlatformWallet(tx);
+      const refundedAt = new Date();
+
+      await this.createWalletLedgerMovement({
+        tx,
+        walletId: platformWallet.id,
+        direction: LedgerDirection.DEBIT,
+        entryType: LedgerEntryType.REFUND,
+        amountKobo: escrow.grossAmountKobo,
+        balanceField: 'escrowBalanceKobo',
+        reference: `escrow-refund:${escrow.escrowReference}:platform-debit`,
+        idempotencyKey: `escrow:${escrow.id}:refund:platform-debit`,
+        relatedOrderId: orderItem.orderId,
+        relatedOrderItemId: orderItem.id,
+        relatedEscrowId: escrow.id,
+        relatedPaymentId: escrow.paymentId ?? undefined,
+        narration: `Escrow refunded to buyer: ${input.reason}`,
+      });
+
+      await this.createWalletLedgerMovement({
+        tx,
+        walletId: buyerWallet.id,
+        direction: LedgerDirection.CREDIT,
+        entryType: LedgerEntryType.REFUND,
+        amountKobo: escrow.grossAmountKobo,
+        balanceField: 'availableBalanceKobo',
+        reference: `escrow-refund:${escrow.escrowReference}:buyer-credit`,
+        idempotencyKey: `escrow:${escrow.id}:refund:buyer-credit`,
+        relatedOrderId: orderItem.orderId,
+        relatedOrderItemId: orderItem.id,
+        relatedEscrowId: escrow.id,
+        relatedPaymentId: escrow.paymentId ?? undefined,
+        narration: `Escrow refunded to buyer: ${input.reason}`,
+      });
+
+      const refundedEscrow = await tx.escrowTransaction.update({
+        where: { id: escrow.id },
+        data: {
+          status: EscrowStatus.REFUNDED,
+          refundedAt,
+        },
+      });
+      const refundedOrderItem = await tx.orderItem.update({
+        where: { id: orderItem.id },
+        data: {
+          status: OrderItemStatus.REFUNDED,
+          refundedAt,
+          safetyTimerExpiresAt: null,
+        },
+      });
+
+      await this.updateParentOrderStatus(tx, orderItem.orderId);
+
+      return {
+        orderId: orderItem.orderId,
+        orderItemId: refundedOrderItem.id,
+        escrowId: refundedEscrow.id,
+        orderItemStatus: refundedOrderItem.status,
+        escrowStatus: refundedEscrow.status,
+        refundAmountKobo: refundedEscrow.grossAmountKobo,
+        refundedAt,
+      };
+    });
+
+    this.logger.log(`Escrow refunded for order item ${input.orderItemId}`);
+
+    return {
+      ...result,
+      refundAmountKobo: result.refundAmountKobo.toString(),
+    };
+  }
+
   private assertReleaseEligible(
     orderItem: {
       status: OrderItemStatus;
@@ -225,10 +369,13 @@ export class EscrowService {
       };
       disputes: unknown[];
     },
-    requireBuyerConfirmationState: boolean | undefined,
+    input: Pick<
+      ReleaseEscrowToSellerInput,
+      'requireBuyerConfirmationState' | 'allowDisputedRelease'
+    >,
   ): void {
     if (
-      requireBuyerConfirmationState &&
+      input.requireBuyerConfirmationState &&
       !buyerConfirmationStatuses.includes(orderItem.status)
     ) {
       throw new UnprocessableEntityException(
@@ -237,7 +384,8 @@ export class EscrowService {
     }
 
     if (
-      orderItem.status === OrderItemStatus.DISPUTED ||
+      (orderItem.status === OrderItemStatus.DISPUTED &&
+        !input.allowDisputedRelease) ||
       orderItem.status === OrderItemStatus.RELEASED ||
       orderItem.status === OrderItemStatus.REFUNDED ||
       orderItem.status === OrderItemStatus.CANCELLED
@@ -247,7 +395,12 @@ export class EscrowService {
       );
     }
 
-    if (orderItem.escrow.status !== EscrowStatus.HELD) {
+    const allowedEscrowStatus =
+      orderItem.escrow.status === EscrowStatus.HELD ||
+      (input.allowDisputedRelease &&
+        orderItem.escrow.status === EscrowStatus.DISPUTED);
+
+    if (!allowedEscrowStatus) {
       throw new UnprocessableEntityException('Order item escrow is not held');
     }
 
@@ -259,7 +412,54 @@ export class EscrowService {
 
     if (orderItem.disputes.length > 0) {
       throw new UnprocessableEntityException(
-        'Disputed order items cannot be released by buyer confirmation',
+        'Order item still has an active dispute',
+      );
+    }
+  }
+
+  private assertRefundEligible(
+    orderItem: {
+      status: OrderItemStatus;
+      escrow: {
+        status: EscrowStatus;
+        releasedAt: Date | null;
+        refundedAt: Date | null;
+      };
+      disputes: unknown[];
+    },
+    input: Pick<RefundEscrowToBuyerInput, 'allowDisputedRefund'>,
+  ): void {
+    if (
+      orderItem.status === OrderItemStatus.RELEASED ||
+      orderItem.status === OrderItemStatus.REFUNDED ||
+      orderItem.status === OrderItemStatus.CANCELLED
+    ) {
+      throw new UnprocessableEntityException(
+        'Order item cannot be refunded from its current state',
+      );
+    }
+
+    const allowedEscrowStatus =
+      orderItem.escrow.status === EscrowStatus.FUNDED ||
+      orderItem.escrow.status === EscrowStatus.HELD ||
+      (input.allowDisputedRefund &&
+        orderItem.escrow.status === EscrowStatus.DISPUTED);
+
+    if (!allowedEscrowStatus) {
+      throw new UnprocessableEntityException(
+        'Order item escrow cannot be refunded from its current state',
+      );
+    }
+
+    if (orderItem.escrow.releasedAt || orderItem.escrow.refundedAt) {
+      throw new UnprocessableEntityException(
+        'Order item escrow is already closed',
+      );
+    }
+
+    if (orderItem.disputes.length > 0) {
+      throw new UnprocessableEntityException(
+        'Order item still has an active dispute',
       );
     }
   }
@@ -361,12 +561,28 @@ export class EscrowService {
     const allItemsClosed = orderItems.every((item) =>
       closedOrderItemStatuses.includes(item.status),
     );
+    const allItemsRefunded = orderItems.every(
+      (item) => item.status === OrderItemStatus.REFUNDED,
+    );
 
     await tx.order.update({
       where: { id: orderId },
-      data: allItemsClosed
-        ? { status: OrderStatus.COMPLETED, completedAt: new Date() }
-        : { status: OrderStatus.PARTIALLY_FULFILLED },
+      data: this.buildParentOrderStatusUpdate(allItemsClosed, allItemsRefunded),
     });
+  }
+
+  private buildParentOrderStatusUpdate(
+    allItemsClosed: boolean,
+    allItemsRefunded: boolean,
+  ): { status: OrderStatus; completedAt?: Date } {
+    if (allItemsRefunded) {
+      return { status: OrderStatus.REFUNDED, completedAt: new Date() };
+    }
+
+    if (allItemsClosed) {
+      return { status: OrderStatus.COMPLETED, completedAt: new Date() };
+    }
+
+    return { status: OrderStatus.PARTIALLY_FULFILLED };
   }
 }

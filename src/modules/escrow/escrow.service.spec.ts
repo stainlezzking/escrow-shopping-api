@@ -48,6 +48,20 @@ describe('EscrowService', () => {
     createdAt: new Date('2026-07-03T08:00:00.000Z'),
     updatedAt: new Date('2026-07-03T08:00:00.000Z'),
   };
+  const buyerWallet = {
+    id: 'buyer_wallet_one',
+    ownerType: WalletOwnerType.BUYER,
+    buyerProfileId: 'buyer_profile_one',
+    sellerProfileId: null,
+    platformEntityId: null,
+    availableBalanceKobo: BigInt(7000),
+    escrowBalanceKobo: BigInt(0),
+    pendingPayoutBalanceKobo: BigInt(0),
+    payoutPinHash: null,
+    status: WalletStatus.ACTIVE,
+    createdAt: new Date('2026-07-03T08:00:00.000Z'),
+    updatedAt: new Date('2026-07-03T08:00:00.000Z'),
+  };
   const escrow = {
     id: 'escrow_one',
     orderItemId: 'order_item_one',
@@ -79,6 +93,13 @@ describe('EscrowService', () => {
     sellerProfile: {
       id: 'store_one',
       wallet: sellerWallet,
+    },
+    order: {
+      id: 'order_one',
+      buyerProfile: {
+        id: 'buyer_profile_one',
+        wallet: buyerWallet,
+      },
     },
     disputes: [],
   };
@@ -248,5 +269,154 @@ describe('EscrowService', () => {
         requireBuyerConfirmationState: true,
       }),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('returns existing release without duplicating ledger entries', async () => {
+    const releasedAt = new Date('2026-07-03T09:10:00.000Z');
+    tx.orderItem.findUnique.mockResolvedValue({
+      ...orderItem,
+      status: OrderItemStatus.RELEASED,
+      confirmedAt: releasedAt,
+      releasedAt,
+      escrow: { ...escrow, status: EscrowStatus.RELEASED, releasedAt },
+    });
+
+    const result = await service.releaseEscrowToSeller({
+      orderItemId: 'order_item_one',
+      reason: 'BUYER_CONFIRMATION',
+      requireBuyerConfirmationState: true,
+    });
+
+    expect(result.orderItemStatus).toBe(OrderItemStatus.RELEASED);
+    expect(tx.walletLedgerEntry.create).not.toHaveBeenCalled();
+    expect(tx.wallet.update).not.toHaveBeenCalled();
+  });
+
+  it('refunds held escrow to the buyer wallet and updates parent order status', async () => {
+    tx.wallet.findUnique
+      .mockReset()
+      .mockResolvedValueOnce(platformWallet)
+      .mockResolvedValueOnce(buyerWallet);
+    tx.escrowTransaction.update.mockResolvedValue({
+      ...escrow,
+      status: EscrowStatus.REFUNDED,
+      refundedAt: new Date('2026-07-03T09:11:00.000Z'),
+    });
+    tx.orderItem.update.mockResolvedValue({
+      ...orderItem,
+      status: OrderItemStatus.REFUNDED,
+      refundedAt: new Date('2026-07-03T09:11:00.000Z'),
+    });
+    tx.orderItem.findMany.mockResolvedValue([
+      { status: OrderItemStatus.REFUNDED },
+    ]);
+
+    const result = await service.refundEscrowToBuyer({
+      orderItemId: 'order_item_one',
+      reason: 'ADMIN_REFUND',
+    });
+
+    expect(tx.wallet.update).toHaveBeenNthCalledWith(1, {
+      where: { id: 'platform_wallet_one' },
+      data: { escrowBalanceKobo: BigInt(29000) },
+    });
+    expect(tx.wallet.update).toHaveBeenNthCalledWith(2, {
+      where: { id: 'buyer_wallet_one' },
+      data: { availableBalanceKobo: BigInt(28000) },
+    });
+    expect(tx.walletLedgerEntry.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        walletId: 'platform_wallet_one',
+        direction: LedgerDirection.DEBIT,
+        entryType: LedgerEntryType.REFUND,
+        amountKobo: BigInt(21000),
+        idempotencyKey: 'escrow:escrow_one:refund:platform-debit',
+      }),
+    });
+    expect(tx.walletLedgerEntry.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        walletId: 'buyer_wallet_one',
+        direction: LedgerDirection.CREDIT,
+        entryType: LedgerEntryType.REFUND,
+        amountKobo: BigInt(21000),
+        idempotencyKey: 'escrow:escrow_one:refund:buyer-credit',
+      }),
+    });
+    expect(tx.escrowTransaction.update).toHaveBeenCalledWith({
+      where: { id: 'escrow_one' },
+      data: expect.objectContaining({ status: EscrowStatus.REFUNDED }),
+    });
+    expect(tx.orderItem.update).toHaveBeenCalledWith({
+      where: { id: 'order_item_one' },
+      data: expect.objectContaining({
+        status: OrderItemStatus.REFUNDED,
+        safetyTimerExpiresAt: null,
+      }),
+    });
+    expect(tx.order.update).toHaveBeenCalledWith({
+      where: { id: 'order_one' },
+      data: expect.objectContaining({ status: OrderStatus.REFUNDED }),
+    });
+    expect(result.orderItemStatus).toBe(OrderItemStatus.REFUNDED);
+    expect(result.escrowStatus).toBe(EscrowStatus.REFUNDED);
+    expect(result.refundAmountKobo).toBe('21000');
+  });
+
+  it('returns existing refund without duplicating ledger entries', async () => {
+    const refundedAt = new Date('2026-07-03T09:11:00.000Z');
+    tx.orderItem.findUnique.mockResolvedValue({
+      ...orderItem,
+      status: OrderItemStatus.REFUNDED,
+      refundedAt,
+      escrow: { ...escrow, status: EscrowStatus.REFUNDED, refundedAt },
+    });
+
+    const result = await service.refundEscrowToBuyer({
+      orderItemId: 'order_item_one',
+      reason: 'ADMIN_REFUND',
+    });
+
+    expect(result.orderItemStatus).toBe(OrderItemStatus.REFUNDED);
+    expect(tx.walletLedgerEntry.create).not.toHaveBeenCalled();
+    expect(tx.wallet.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects refund when escrow is already released', async () => {
+    tx.orderItem.findUnique.mockResolvedValue({
+      ...orderItem,
+      escrow: {
+        ...escrow,
+        status: EscrowStatus.RELEASED,
+        releasedAt: new Date('2026-07-03T09:10:00.000Z'),
+      },
+    });
+
+    await expect(
+      service.refundEscrowToBuyer({
+        orderItemId: 'order_item_one',
+        reason: 'ADMIN_REFUND',
+      }),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+
+    expect(tx.walletLedgerEntry.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects refund when an active dispute still exists', async () => {
+    tx.orderItem.findUnique.mockResolvedValue({
+      ...orderItem,
+      status: OrderItemStatus.DISPUTED,
+      escrow: { ...escrow, status: EscrowStatus.DISPUTED },
+      disputes: [{ id: 'dispute_one' }],
+    });
+
+    await expect(
+      service.refundEscrowToBuyer({
+        orderItemId: 'order_item_one',
+        reason: 'DISPUTE_REFUND',
+        allowDisputedRefund: true,
+      }),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+
+    expect(tx.walletLedgerEntry.create).not.toHaveBeenCalled();
   });
 });
