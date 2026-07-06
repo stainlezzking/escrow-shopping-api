@@ -1,9 +1,12 @@
-import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Param, Post, UseGuards } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiBody,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
+  ApiNotFoundResponse,
   ApiOperation,
+  ApiParam,
   ApiTags,
   ApiUnauthorizedResponse,
   ApiUnprocessableEntityResponse,
@@ -15,6 +18,16 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user';
+import {
+  DispatchOrderItemDto,
+  DispatchOrderItemParamsSchema,
+  DispatchOrderItemSchema,
+} from './dto/dispatch-order-item.dto';
+import type {
+  DispatchOrderItemInput,
+  DispatchOrderItemParamsInput,
+} from './dto/dispatch-order-item.dto';
+import { DispatchOrderItemResponseDto } from './dto/dispatch-response.dto';
 import {
   InitializeOrderDto,
   InitializeOrderSchema,
@@ -51,5 +64,38 @@ export class OrdersController {
     dto: InitializeOrderInput,
   ): Promise<OrderResponseDto> {
     return this.ordersService.initializeOrder(user.sub, dto);
+  }
+
+  /**
+   * Stores seller dispatch evidence and starts the safety timer.
+   */
+  @Post(':orderId/items/:itemId/dispatch')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.SELLER)
+  @ApiOperation({ summary: 'Dispatch seller order item' })
+  @ApiParam({ name: 'orderId', description: 'Parent order ID' })
+  @ApiParam({ name: 'itemId', description: 'Order item ID' })
+  @ApiBody({ type: DispatchOrderItemDto })
+  @ApiCreatedResponse({ type: DispatchOrderItemResponseDto })
+  @ApiUnauthorizedResponse({ description: 'Authentication required' })
+  @ApiForbiddenResponse({ description: 'Seller ownership required' })
+  @ApiNotFoundResponse({ description: 'Order item not found' })
+  @ApiUnprocessableEntityResponse({
+    description: 'Order item, payment, or escrow state does not allow dispatch',
+  })
+  dispatchOrderItem(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param(new ZodValidationPipe(DispatchOrderItemParamsSchema))
+    params: DispatchOrderItemParamsInput,
+    @Body(new ZodValidationPipe(DispatchOrderItemSchema))
+    dto: DispatchOrderItemInput,
+  ): Promise<DispatchOrderItemResponseDto> {
+    return this.ordersService.dispatchOrderItem(
+      user.sub,
+      params.orderId,
+      params.itemId,
+      dto,
+    );
   }
 }

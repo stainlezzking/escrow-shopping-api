@@ -4,14 +4,17 @@
 /* eslint-disable @typescript-eslint/require-await */
 /* eslint-disable @typescript-eslint/unbound-method */
 import {
+  ForbiddenException,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import {
   AccountStatus,
+  EscrowStatus,
   KycStatus,
   OrderItemStatus,
   OrderStatus,
+  PaymentStatus,
   ProductStatus,
   StoreStatus,
 } from '@prisma/client';
@@ -94,7 +97,10 @@ describe('OrdersService', () => {
   };
 
   let tx: {
-    order: { create: jest.Mock };
+    order: { create: jest.Mock; updateMany: jest.Mock };
+    orderItem: { findFirst: jest.Mock; update: jest.Mock };
+    dispatchEvidence: { create: jest.Mock };
+    platformSetting: { findUnique: jest.Mock };
   };
   let prisma: jest.Mocked<PrismaService>;
   let service: OrdersService;
@@ -103,6 +109,17 @@ describe('OrdersService', () => {
     tx = {
       order: {
         create: jest.fn().mockResolvedValue(createdOrder),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      orderItem: {
+        findFirst: jest.fn(),
+        update: jest.fn(),
+      },
+      dispatchEvidence: {
+        create: jest.fn(),
+      },
+      platformSetting: {
+        findUnique: jest.fn().mockResolvedValue(null),
       },
     };
 
@@ -120,6 +137,10 @@ describe('OrdersService', () => {
     } as unknown as jest.Mocked<PrismaService>;
 
     service = new OrdersService(prisma);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   it('initializes a pending payment order from client-provided items without reading cart items', async () => {
@@ -189,6 +210,205 @@ describe('OrdersService', () => {
     await expect(
       service.initializeOrder('buyer_user', {
         items: [{ productId: 'product_one', quantity: 6 }],
+      }),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+  });
+
+  it('stores seller dispatch evidence and starts the safety timer', async () => {
+    const now = new Date('2026-06-24T10:00:00.000Z');
+    jest.spyOn(Date, 'now').mockReturnValue(now.getTime());
+    const evidence = {
+      id: 'dispatch_evidence_one',
+      orderItemId: 'order_item_one',
+      sellerProfileId: 'store_one',
+      evidenceType: 'courier_receipt',
+      imageUrl: null,
+      storageKey: 'dispatch/store-one/order-item-one.jpg',
+      trackingReference: 'TRK-001',
+      courierName: 'GIG Logistics',
+      notes: null,
+      uploadedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    };
+    tx.orderItem.findFirst.mockResolvedValue({
+      id: 'order_item_one',
+      orderId: 'order_one',
+      sellerProfileId: 'store_one',
+      status: OrderItemStatus.AWAITING_DISPATCH,
+      sellerProfile: {
+        id: 'store_one',
+        userId: 'seller_user',
+      },
+      escrow: {
+        id: 'escrow_one',
+        status: EscrowStatus.HELD,
+      },
+      order: {
+        id: 'order_one',
+        payments: [{ id: 'payment_one', status: PaymentStatus.SUCCESS }],
+      },
+    });
+    tx.dispatchEvidence.create.mockResolvedValue(evidence);
+    tx.orderItem.update.mockResolvedValue({
+      id: 'order_item_one',
+      orderId: 'order_one',
+      status: OrderItemStatus.DISPATCHED,
+      dispatchedAt: now,
+      safetyTimerExpiresAt: new Date('2026-06-29T10:00:00.000Z'),
+    });
+
+    const result = await service.dispatchOrderItem(
+      'seller_user',
+      'order_one',
+      'order_item_one',
+      {
+        evidenceType: 'courier_receipt',
+        storageKey: 'dispatch/store-one/order-item-one.jpg',
+        trackingReference: 'TRK-001',
+        courierName: 'GIG Logistics',
+      },
+    );
+
+    expect(tx.orderItem.findFirst).toHaveBeenCalledWith({
+      where: { id: 'order_item_one', orderId: 'order_one' },
+      include: expect.any(Object),
+    });
+    expect(tx.dispatchEvidence.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orderItemId: 'order_item_one',
+        sellerProfileId: 'store_one',
+        storageKey: 'dispatch/store-one/order-item-one.jpg',
+        trackingReference: 'TRK-001',
+      }),
+    });
+    expect(tx.orderItem.update).toHaveBeenCalledWith({
+      where: { id: 'order_item_one' },
+      data: {
+        status: OrderItemStatus.DISPATCHED,
+        dispatchedAt: expect.any(Date),
+        safetyTimerExpiresAt: new Date('2026-06-29T10:00:00.000Z'),
+      },
+    });
+    expect(tx.order.updateMany).toHaveBeenCalledWith({
+      where: { id: 'order_one', status: OrderStatus.PAID },
+      data: { status: OrderStatus.PARTIALLY_FULFILLED },
+    });
+    expect(result.status).toBe(OrderItemStatus.DISPATCHED);
+    expect(result.evidence.id).toBe('dispatch_evidence_one');
+  });
+
+  it('rejects dispatch when the order item is missing', async () => {
+    tx.orderItem.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.dispatchOrderItem('seller_user', 'order_one', 'missing_item', {
+        trackingReference: 'TRK-001',
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('rejects dispatch by a seller that does not own the item', async () => {
+    tx.orderItem.findFirst.mockResolvedValue({
+      id: 'order_item_one',
+      orderId: 'order_one',
+      sellerProfileId: 'store_one',
+      status: OrderItemStatus.AWAITING_DISPATCH,
+      sellerProfile: {
+        id: 'store_one',
+        userId: 'seller_user',
+      },
+      escrow: {
+        id: 'escrow_one',
+        status: EscrowStatus.HELD,
+      },
+      order: {
+        payments: [{ id: 'payment_one', status: PaymentStatus.SUCCESS }],
+      },
+    });
+
+    await expect(
+      service.dispatchOrderItem('other_seller', 'order_one', 'order_item_one', {
+        trackingReference: 'TRK-001',
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(tx.dispatchEvidence.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects dispatch when item status is not awaiting dispatch', async () => {
+    tx.orderItem.findFirst.mockResolvedValue({
+      id: 'order_item_one',
+      orderId: 'order_one',
+      sellerProfileId: 'store_one',
+      status: OrderItemStatus.PENDING_PAYMENT,
+      sellerProfile: {
+        id: 'store_one',
+        userId: 'seller_user',
+      },
+      escrow: {
+        id: 'escrow_one',
+        status: EscrowStatus.HELD,
+      },
+      order: {
+        payments: [{ id: 'payment_one', status: PaymentStatus.SUCCESS }],
+      },
+    });
+
+    await expect(
+      service.dispatchOrderItem('seller_user', 'order_one', 'order_item_one', {
+        trackingReference: 'TRK-001',
+      }),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+  });
+
+  it('rejects dispatch when payment has not been verified', async () => {
+    tx.orderItem.findFirst.mockResolvedValue({
+      id: 'order_item_one',
+      orderId: 'order_one',
+      sellerProfileId: 'store_one',
+      status: OrderItemStatus.AWAITING_DISPATCH,
+      sellerProfile: {
+        id: 'store_one',
+        userId: 'seller_user',
+      },
+      escrow: {
+        id: 'escrow_one',
+        status: EscrowStatus.HELD,
+      },
+      order: {
+        payments: [],
+      },
+    });
+
+    await expect(
+      service.dispatchOrderItem('seller_user', 'order_one', 'order_item_one', {
+        trackingReference: 'TRK-001',
+      }),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+  });
+
+  it('rejects dispatch when escrow is not held', async () => {
+    tx.orderItem.findFirst.mockResolvedValue({
+      id: 'order_item_one',
+      orderId: 'order_one',
+      sellerProfileId: 'store_one',
+      status: OrderItemStatus.AWAITING_DISPATCH,
+      sellerProfile: {
+        id: 'store_one',
+        userId: 'seller_user',
+      },
+      escrow: {
+        id: 'escrow_one',
+        status: EscrowStatus.FUNDED,
+      },
+      order: {
+        payments: [{ id: 'payment_one', status: PaymentStatus.SUCCESS }],
+      },
+    });
+
+    await expect(
+      service.dispatchOrderItem('seller_user', 'order_one', 'order_item_one', {
+        trackingReference: 'TRK-001',
       }),
     ).rejects.toBeInstanceOf(UnprocessableEntityException);
   });

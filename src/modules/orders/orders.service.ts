@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -6,19 +7,26 @@ import {
 } from '@nestjs/common';
 import {
   AccountStatus,
+  EscrowStatus,
   KycStatus,
   OrderItemStatus,
   OrderStatus,
+  PaymentStatus,
   ProductStatus,
   StoreStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
+import { DispatchOrderItemInput } from './dto/dispatch-order-item.dto';
+import { DispatchOrderItemResponseDto } from './dto/dispatch-response.dto';
 import { InitializeOrderInput } from './dto/initialize-order.dto';
 import { OrderResponseDto } from './dto/order-response.dto';
 import { mapOrder } from './order.mapper';
 
 const SERVICE_FEE_BASIS_POINTS = 500;
 const BASIS_POINTS_DIVISOR = BigInt(10_000);
+const SAFETY_TIMER_SETTING_KEY = 'order_item_safety_timer_days';
+const DEFAULT_SAFETY_TIMER_DAYS = 5;
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
 
 const orderInclude = {
   items: {
@@ -55,6 +63,17 @@ interface CheckoutLine {
   shippingFeeKobo: bigint;
   serviceFeeKobo: bigint;
   netEscrowAmountKobo: bigint;
+}
+
+interface DispatchEvidenceLike {
+  id: string;
+  evidenceType: string | null;
+  imageUrl: string | null;
+  storageKey: string | null;
+  trackingReference: string | null;
+  courierName: string | null;
+  notes: string | null;
+  uploadedAt: Date;
 }
 
 /**
@@ -133,6 +152,114 @@ export class OrdersService {
     );
 
     return mapOrder(order, SERVICE_FEE_BASIS_POINTS);
+  }
+
+  /**
+   * Stores seller dispatch evidence and starts the item safety timer.
+   *
+   * @param userId - Authenticated seller user ID.
+   * @param orderId - Parent order ID.
+   * @param itemId - Order item being dispatched.
+   * @param input - Validated dispatch evidence metadata.
+   * @returns Dispatch status and saved evidence metadata.
+   * @throws NotFoundException when the order item is missing.
+   * @throws ForbiddenException when the seller does not own the order item.
+   * @throws UnprocessableEntityException when payment, item, or escrow state is invalid.
+   */
+  async dispatchOrderItem(
+    userId: string,
+    orderId: string,
+    itemId: string,
+    input: DispatchOrderItemInput,
+  ): Promise<DispatchOrderItemResponseDto> {
+    const result = await this.prisma.$transaction(async (tx) => {
+      const orderItem = await tx.orderItem.findFirst({
+        where: { id: itemId, orderId },
+        include: {
+          sellerProfile: true,
+          escrow: true,
+          order: {
+            include: {
+              payments: {
+                where: { status: PaymentStatus.SUCCESS },
+                take: 1,
+              },
+            },
+          },
+        },
+      });
+
+      if (!orderItem) {
+        throw new NotFoundException('Order item not found');
+      }
+
+      if (orderItem.sellerProfile.userId !== userId) {
+        throw new ForbiddenException(
+          'You are not allowed to dispatch this order item',
+        );
+      }
+
+      if (orderItem.status !== OrderItemStatus.AWAITING_DISPATCH) {
+        throw new UnprocessableEntityException(
+          'Order item is not awaiting dispatch',
+        );
+      }
+
+      if (!orderItem.order.payments.length) {
+        throw new UnprocessableEntityException(
+          'Order payment has not been verified',
+        );
+      }
+
+      if (!orderItem.escrow || orderItem.escrow.status !== EscrowStatus.HELD) {
+        throw new UnprocessableEntityException('Order item escrow is not held');
+      }
+
+      const safetyTimerExpiresAt = await this.calculateSafetyTimerExpiry(tx);
+      const dispatchedAt = new Date();
+
+      const evidence = await tx.dispatchEvidence.create({
+        data: {
+          orderItemId: itemId,
+          sellerProfileId: orderItem.sellerProfileId,
+          evidenceType: input.evidenceType,
+          imageUrl: input.imageUrl,
+          storageKey: input.storageKey,
+          trackingReference: input.trackingReference,
+          courierName: input.courierName,
+          notes: input.notes,
+        },
+      });
+
+      const updatedItem = await tx.orderItem.update({
+        where: { id: itemId },
+        data: {
+          status: OrderItemStatus.DISPATCHED,
+          dispatchedAt,
+          safetyTimerExpiresAt,
+        },
+      });
+
+      await tx.order.updateMany({
+        where: { id: orderId, status: OrderStatus.PAID },
+        data: { status: OrderStatus.PARTIALLY_FULFILLED },
+      });
+
+      return { orderItem: updatedItem, evidence };
+    });
+
+    this.logger.log(
+      `Order item dispatched by seller ${userId}: ${result.orderItem.id}`,
+    );
+
+    return this.mapDispatchOrderItemResponse(
+      result.orderItem.orderId,
+      result.orderItem.id,
+      result.orderItem.status,
+      result.orderItem.dispatchedAt,
+      result.orderItem.safetyTimerExpiresAt,
+      result.evidence,
+    );
   }
 
   private aggregateItems(
@@ -242,5 +369,75 @@ export class OrdersService {
     const random = Math.random().toString(36).slice(2, 10).toUpperCase();
 
     return `ORD-${date}-${random}`;
+  }
+
+  private async calculateSafetyTimerExpiry(tx: {
+    platformSetting: {
+      findUnique: (args: {
+        where: { settingKey: string };
+      }) => Promise<{ settingValue: string } | null>;
+    };
+  }): Promise<Date> {
+    const setting = await tx.platformSetting.findUnique({
+      where: { settingKey: SAFETY_TIMER_SETTING_KEY },
+    });
+    const safetyTimerDays = this.parseSafetyTimerDays(
+      setting?.settingValue,
+      DEFAULT_SAFETY_TIMER_DAYS,
+    );
+
+    return new Date(Date.now() + safetyTimerDays * MILLISECONDS_PER_DAY);
+  }
+
+  private parseSafetyTimerDays(
+    settingValue: string | undefined,
+    fallbackDays: number,
+  ): number {
+    if (!settingValue) {
+      return fallbackDays;
+    }
+
+    const parsedValue = Number(settingValue);
+
+    if (!Number.isInteger(parsedValue) || parsedValue < 1 || parsedValue > 60) {
+      throw new UnprocessableEntityException(
+        'Invalid order item safety timer platform setting',
+      );
+    }
+
+    return parsedValue;
+  }
+
+  private mapDispatchOrderItemResponse(
+    orderId: string,
+    orderItemId: string,
+    status: OrderItemStatus,
+    dispatchedAt: Date | null,
+    safetyTimerExpiresAt: Date | null,
+    evidence: DispatchEvidenceLike,
+  ): DispatchOrderItemResponseDto {
+    if (!dispatchedAt || !safetyTimerExpiresAt) {
+      throw new UnprocessableEntityException(
+        'Dispatch timestamp could not be saved',
+      );
+    }
+
+    return {
+      orderId,
+      orderItemId,
+      status,
+      dispatchedAt,
+      safetyTimerExpiresAt,
+      evidence: {
+        id: evidence.id,
+        evidenceType: evidence.evidenceType,
+        imageUrl: evidence.imageUrl,
+        storageKey: evidence.storageKey,
+        trackingReference: evidence.trackingReference,
+        courierName: evidence.courierName,
+        notes: evidence.notes,
+        uploadedAt: evidence.uploadedAt,
+      },
+    };
   }
 }
