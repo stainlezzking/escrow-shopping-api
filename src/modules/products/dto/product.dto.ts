@@ -26,12 +26,12 @@ const storageKeySchema = z
  * Validates seller product creation payloads.
  */
 export const CreateProductSchema = z.object({
-  sellerProfileId: z.string().uuid(),
+  sellerProfileId: z.uuid(),
   title: z.string().trim().min(2).max(160),
   description: optionalTrimmedString(2000),
   priceKobo: moneyKoboSchema,
   stockQuantity: z.coerce.number().int().min(0),
-  categoryIds: z.array(z.string().uuid()).max(10).optional(),
+  categoryIds: z.array(z.uuid()).max(10).optional(),
 });
 
 /**
@@ -52,7 +52,7 @@ export const UpdateProductSchema = z
       ])
       .optional(),
     isActive: z.boolean().optional(),
-    categoryIds: z.array(z.string().uuid()).max(10).optional(),
+    categoryIds: z.array(z.uuid()).max(10).optional(),
   })
   .refine((value) => Object.keys(value).length > 0, {
     message: 'At least one product field must be provided',
@@ -74,14 +74,14 @@ export const ProductSearchQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   q: z.string().trim().min(1).max(120).optional(),
-  categoryId: z.string().uuid().optional(),
+  categoryId: z.uuid().optional(),
 });
 
 /**
  * Validates product route params.
  */
 export const ProductParamsSchema = z.object({
-  productId: z.string().uuid(),
+  productId: z.uuid(),
 });
 
 /**

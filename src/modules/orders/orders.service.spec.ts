@@ -62,9 +62,9 @@ describe('OrdersService', () => {
     orderReference: 'ORD-20260623-ABC123',
     status: OrderStatus.PENDING_PAYMENT,
     totalProductAmountKobo: BigInt(20000),
-    totalShippingFeeKobo: BigInt(0),
+    totalShippingFeeKobo: BigInt(2500),
     totalServiceFeeKobo: BigInt(1000),
-    totalOrderAmountKobo: BigInt(21000),
+    totalOrderAmountKobo: BigInt(23500),
     cancelledAt: null,
     completedAt: null,
     createdAt: new Date('2026-06-23T09:01:00.000Z'),
@@ -75,10 +75,11 @@ describe('OrdersService', () => {
         orderId: 'order_one',
         productId: 'product_one',
         sellerProfileId: 'store_one',
+        deliveryQuoteId: 'delivery_quote_one',
         quantity: 2,
         unitPriceAtCheckoutKobo: BigInt(10000),
         productAmountKobo: BigInt(20000),
-        shippingFeeKobo: BigInt(0),
+        shippingFeeKobo: BigInt(2500),
         serviceFeeKobo: BigInt(1000),
         netEscrowAmountKobo: BigInt(20000),
         status: OrderItemStatus.PENDING_PAYMENT,
@@ -95,6 +96,15 @@ describe('OrdersService', () => {
         product,
       },
     ],
+  };
+
+  const deliveryQuote = {
+    id: 'delivery_quote_one',
+    buyerProfileId: 'buyer_profile_one',
+    productId: 'product_one',
+    sellerProfileId: 'store_one',
+    quotedFeeKobo: BigInt(2500),
+    expiresAt: new Date('2099-06-24T09:00:00.000Z'),
   };
 
   let tx: {
@@ -138,6 +148,9 @@ describe('OrdersService', () => {
       orderItem: {
         findFirst: jest.fn(),
       },
+      deliveryQuote: {
+        findMany: jest.fn().mockResolvedValue([deliveryQuote]),
+      },
       $transaction: jest.fn(async (callback) => callback(tx)),
     } as unknown as jest.Mocked<PrismaService>;
 
@@ -164,7 +177,13 @@ describe('OrdersService', () => {
 
   it('initializes a pending payment order from client-provided items without reading cart items', async () => {
     const result = await service.initializeOrder('buyer_user', {
-      items: [{ productId: 'product_one', quantity: 2 }],
+      items: [
+        {
+          productId: 'product_one',
+          quantity: 2,
+          deliveryQuoteId: 'delivery_quote_one',
+        },
+      ],
     });
 
     expect(prisma.buyerProfile.findUnique).toHaveBeenCalledWith({
@@ -174,23 +193,27 @@ describe('OrdersService', () => {
       where: { id: { in: ['product_one'] } },
       include: { sellerProfile: true },
     });
+    expect(prisma.deliveryQuote.findMany).toHaveBeenCalledWith({
+      where: { id: { in: ['delivery_quote_one'] } },
+    });
     expect(tx.order.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         buyerProfileId: 'buyer_profile_one',
         status: OrderStatus.PENDING_PAYMENT,
         totalProductAmountKobo: BigInt(20000),
-        totalShippingFeeKobo: BigInt(0),
+        totalShippingFeeKobo: BigInt(2500),
         totalServiceFeeKobo: BigInt(1000),
-        totalOrderAmountKobo: BigInt(21000),
+        totalOrderAmountKobo: BigInt(23500),
         items: {
           create: [
             expect.objectContaining({
               productId: 'product_one',
               sellerProfileId: 'store_one',
+              deliveryQuoteId: 'delivery_quote_one',
               quantity: 2,
               unitPriceAtCheckoutKobo: BigInt(10000),
               productAmountKobo: BigInt(20000),
-              shippingFeeKobo: BigInt(0),
+              shippingFeeKobo: BigInt(2500),
               serviceFeeKobo: BigInt(1000),
               netEscrowAmountKobo: BigInt(20000),
               status: OrderItemStatus.PENDING_PAYMENT,
@@ -201,7 +224,8 @@ describe('OrdersService', () => {
       include: expect.any(Object),
     });
     expect(result.status).toBe(OrderStatus.PENDING_PAYMENT);
-    expect(result.totalOrderAmountKobo).toBe('21000');
+    expect(result.totalOrderAmountKobo).toBe('23500');
+    expect(result.totalShippingFeeKobo).toBe('2500');
     expect(result.items[0].serviceFeeKobo).toBe('1000');
   });
 
@@ -210,7 +234,13 @@ describe('OrdersService', () => {
 
     await expect(
       service.initializeOrder('missing_user', {
-        items: [{ productId: 'product_one', quantity: 1 }],
+        items: [
+          {
+            productId: 'product_one',
+            quantity: 1,
+            deliveryQuoteId: 'delivery_quote_one',
+          },
+        ],
       }),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
@@ -220,7 +250,13 @@ describe('OrdersService', () => {
 
     await expect(
       service.initializeOrder('buyer_user', {
-        items: [{ productId: 'missing_product', quantity: 1 }],
+        items: [
+          {
+            productId: 'missing_product',
+            quantity: 1,
+            deliveryQuoteId: 'delivery_quote_one',
+          },
+        ],
       }),
     ).rejects.toBeInstanceOf(UnprocessableEntityException);
   });
@@ -228,7 +264,13 @@ describe('OrdersService', () => {
   it('rejects products with insufficient stock', async () => {
     await expect(
       service.initializeOrder('buyer_user', {
-        items: [{ productId: 'product_one', quantity: 6 }],
+        items: [
+          {
+            productId: 'product_one',
+            quantity: 6,
+            deliveryQuoteId: 'delivery_quote_one',
+          },
+        ],
       }),
     ).rejects.toBeInstanceOf(UnprocessableEntityException);
   });

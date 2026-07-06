@@ -36,8 +36,8 @@ export const DispatchOrderItemSchema = z
  * Validates order item dispatch route params.
  */
 export const DispatchOrderItemParamsSchema = z.object({
-  orderId: z.string().uuid(),
-  itemId: z.string().uuid(),
+  orderId: z.uuid(),
+  itemId: z.uuid(),
 });
 
 export type DispatchOrderItemInput = z.infer<typeof DispatchOrderItemSchema>;

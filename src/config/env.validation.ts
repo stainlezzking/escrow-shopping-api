@@ -45,6 +45,16 @@ export const envSchema = z.object({
     .string()
     .min(3)
     .default('escrova-product-images'),
+  DELIVERY_PROVIDER: z.enum(['DELLYMAN']).default('DELLYMAN'),
+  DELLYMAN_BASE_URL: z.url().default('https://dev.dellyman.com/api/v3.0'),
+  DELLYMAN_API_KEY: z.string().min(1),
+  DELLYMAN_WEBHOOK_SECRET: z.string().default(''),
+  DELIVERY_DEFAULT_VEHICLE: z.string().min(1).default('Bike'),
+  DELIVERY_DEFAULT_PICKUP_WINDOW: z
+    .string()
+    .min(1)
+    .default('08:00 AM to 05:00 PM'),
+  DELIVERY_QUOTE_TTL_MINUTES: z.coerce.number().int().min(5).default(30),
 });
 
 export type EnvVariables = z.infer<typeof envSchema>;

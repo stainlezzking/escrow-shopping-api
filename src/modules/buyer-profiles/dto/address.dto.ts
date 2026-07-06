@@ -38,7 +38,7 @@ export const UpdateBuyerAddressSchema = CreateBuyerAddressSchema.omit({
  * Validates address route parameters.
  */
 export const AddressParamsSchema = z.object({
-  addressId: z.string().uuid(),
+  addressId: z.uuid(),
 });
 
 export type CreateBuyerAddressInput = z.infer<typeof CreateBuyerAddressSchema>;

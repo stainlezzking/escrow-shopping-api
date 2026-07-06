@@ -1,3 +1,4 @@
+import { describe, it, expect } from '@jest/globals';
 import { validateEnv } from './env.validation';
 
 describe('validateEnv', () => {
@@ -12,6 +13,7 @@ describe('validateEnv', () => {
     PAYSTACK_SECRET_KEY: 'paystack_test_secret',
     MINIO_ROOT_PASSWORD: 'escrova_minio_password',
     STORAGE_SECRET_KEY: 'escrova_minio_password',
+    DELLYMAN_API_KEY: 'dellyman_test_api_key',
   };
 
   it('returns safe non-secret defaults when database values are provided', () => {
@@ -44,6 +46,13 @@ describe('validateEnv', () => {
       STORAGE_ACCESS_KEY: 'escrova_minio',
       STORAGE_SECRET_KEY: 'escrova_minio_password',
       STORAGE_PRODUCT_IMAGES_BUCKET: 'escrova-product-images',
+      DELIVERY_PROVIDER: 'DELLYMAN',
+      DELLYMAN_BASE_URL: 'https://dev.dellyman.com/api/v3.0',
+      DELLYMAN_API_KEY: 'dellyman_test_api_key',
+      DELLYMAN_WEBHOOK_SECRET: '',
+      DELIVERY_DEFAULT_VEHICLE: 'Bike',
+      DELIVERY_DEFAULT_PICKUP_WINDOW: '08:00 AM to 05:00 PM',
+      DELIVERY_QUOTE_TTL_MINUTES: 30,
     });
   });
 
@@ -76,6 +85,13 @@ describe('validateEnv', () => {
         STORAGE_ACCESS_KEY: 'minio_user',
         STORAGE_SECRET_KEY: 'minio_password',
         STORAGE_PRODUCT_IMAGES_BUCKET: 'product-images',
+        DELIVERY_PROVIDER: 'DELLYMAN',
+        DELLYMAN_BASE_URL: 'https://dev.dellyman.test/api/v3.0',
+        DELLYMAN_API_KEY: 'dellyman_test_api_key',
+        DELLYMAN_WEBHOOK_SECRET: 'dellyman_webhook_secret',
+        DELIVERY_DEFAULT_VEHICLE: 'Car',
+        DELIVERY_DEFAULT_PICKUP_WINDOW: '09:00 AM to 03:00 PM',
+        DELIVERY_QUOTE_TTL_MINUTES: '45',
       }),
     ).toEqual({
       NODE_ENV: 'test',
@@ -105,6 +121,13 @@ describe('validateEnv', () => {
       STORAGE_ACCESS_KEY: 'minio_user',
       STORAGE_SECRET_KEY: 'minio_password',
       STORAGE_PRODUCT_IMAGES_BUCKET: 'product-images',
+      DELIVERY_PROVIDER: 'DELLYMAN',
+      DELLYMAN_BASE_URL: 'https://dev.dellyman.test/api/v3.0',
+      DELLYMAN_API_KEY: 'dellyman_test_api_key',
+      DELLYMAN_WEBHOOK_SECRET: 'dellyman_webhook_secret',
+      DELIVERY_DEFAULT_VEHICLE: 'Car',
+      DELIVERY_DEFAULT_PICKUP_WINDOW: '09:00 AM to 03:00 PM',
+      DELIVERY_QUOTE_TTL_MINUTES: 45,
     });
   });
 

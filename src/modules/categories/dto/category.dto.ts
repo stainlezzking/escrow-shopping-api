@@ -26,7 +26,7 @@ export const UpdateBusinessCategorySchema =
  */
 export const CreateProductCategorySchema = z.object({
   name: z.string().trim().min(2).max(120),
-  parentCategoryId: z.string().uuid().optional(),
+  parentCategoryId: z.uuid().optional(),
   description: optionalTrimmedString(240),
 });
 
@@ -43,7 +43,7 @@ export const UpdateProductCategorySchema =
  * Validates category route parameters.
  */
 export const CategoryParamsSchema = z.object({
-  categoryId: z.string().uuid(),
+  categoryId: z.uuid(),
 });
 
 export type CreateBusinessCategoryInput = z.infer<

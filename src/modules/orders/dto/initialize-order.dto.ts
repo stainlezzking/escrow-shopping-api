@@ -7,6 +7,7 @@ import { z } from 'zod';
 export const InitializeOrderItemSchema = z.object({
   productId: z.string().uuid(),
   quantity: z.coerce.number().int().min(1).max(99),
+  deliveryQuoteId: z.string().uuid(),
 });
 
 /**
@@ -35,6 +36,12 @@ export class InitializeOrderItemDto {
     description: 'Quantity requested for checkout.',
   })
   quantity: number;
+
+  @ApiProperty({
+    example: '650e8400-e29b-41d4-a716-446655440000',
+    description: 'Backend-created delivery quote selected for this item.',
+  })
+  deliveryQuoteId: string;
 }
 
 /**

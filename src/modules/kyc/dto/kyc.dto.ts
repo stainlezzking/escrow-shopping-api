@@ -23,14 +23,14 @@ export const RejectKycDocumentSchema = z.object({
  * Validates seller profile route params.
  */
 export const SellerProfileParamsSchema = z.object({
-  sellerProfileId: z.string().uuid(),
+  sellerProfileId: z.uuid(),
 });
 
 /**
  * Validates KYC document route params.
  */
 export const KycDocumentParamsSchema = z.object({
-  documentId: z.string().uuid(),
+  documentId: z.uuid(),
 });
 
 export type SubmitKycDocumentInput = z.infer<typeof SubmitKycDocumentSchema>;

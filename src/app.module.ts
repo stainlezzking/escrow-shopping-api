@@ -8,6 +8,7 @@ import { ZodValidationPipe } from './common/pipes/zod-validation.pipe';
 import appConfig from './config/app.config';
 import authConfig from './config/auth.config';
 import databaseConfig from './config/database.config';
+import deliveryConfig from './config/delivery.config';
 import { validateEnv } from './config/env.validation';
 import loggingConfig from './config/logging.config';
 import paymentConfig from './config/payment.config';
@@ -20,6 +21,7 @@ import { PrismaModule } from './database/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { BuyerProfilesModule } from './modules/buyer-profiles/buyer-profiles.module';
 import { CategoriesModule } from './modules/categories/categories.module';
+import { DeliveryModule } from './modules/delivery/delivery.module';
 import { HealthModule } from './modules/health/health.module';
 import { KycModule } from './modules/kyc/kyc.module';
 import { OrdersModule } from './modules/orders/orders.module';
@@ -42,6 +44,7 @@ import { WalletsModule } from './modules/wallets/wallets.module';
         appConfig,
         authConfig,
         databaseConfig,
+        deliveryConfig,
         loggingConfig,
         paymentConfig,
         storageConfig,
@@ -65,6 +68,7 @@ import { WalletsModule } from './modules/wallets/wallets.module';
     AuthModule,
     BuyerProfilesModule,
     CategoriesModule,
+    DeliveryModule,
     SellerStorefrontsModule,
     KycModule,
     ProductsModule,

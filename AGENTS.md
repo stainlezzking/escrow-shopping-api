@@ -371,7 +371,7 @@ export const CreateStorefrontSchema = z.object({
     .min(3)
     .max(40)
     .regex(/^[a-z0-9-]+$/),
-  businessCategoryId: z.string().uuid(),
+  businessCategoryId: z.uuid(),
   baseLocation: z.string().min(2),
   bankName: z.string().min(2),
   accountNumber: z.string().regex(/^\d{10}$/),

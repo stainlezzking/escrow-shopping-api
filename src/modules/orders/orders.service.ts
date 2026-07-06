@@ -68,10 +68,20 @@ interface ProductForCheckout {
 interface CheckoutLine {
   product: ProductForCheckout;
   quantity: number;
+  deliveryQuoteId: string;
   productAmountKobo: bigint;
   shippingFeeKobo: bigint;
   serviceFeeKobo: bigint;
   netEscrowAmountKobo: bigint;
+}
+
+interface DeliveryQuoteForCheckout {
+  id: string;
+  buyerProfileId: string;
+  productId: string | null;
+  sellerProfileId: string | null;
+  quotedFeeKobo: bigint;
+  expiresAt: Date | null;
 }
 
 interface DispatchEvidenceLike {
@@ -122,13 +132,23 @@ export class OrdersService {
       throw new NotFoundException('Buyer profile not found');
     }
 
-    const requestedItems = this.aggregateItems(input.items);
+    const requestedItems = input.items;
     const products = await this.prisma.product.findMany({
       where: { id: { in: requestedItems.map((item) => item.productId) } },
       include: { sellerProfile: true },
     });
+    const deliveryQuotes = await this.prisma.deliveryQuote.findMany({
+      where: {
+        id: { in: requestedItems.map((item) => item.deliveryQuoteId) },
+      },
+    });
 
-    const checkoutLines = this.buildCheckoutLines(requestedItems, products);
+    const checkoutLines = this.buildCheckoutLines(
+      buyerProfile.id,
+      requestedItems,
+      products,
+      deliveryQuotes,
+    );
     const totals = this.calculateTotals(checkoutLines);
 
     const order = await this.prisma.$transaction((tx) =>
@@ -145,6 +165,7 @@ export class OrdersService {
             create: checkoutLines.map((line) => ({
               productId: line.product.id,
               sellerProfileId: line.product.sellerProfileId,
+              deliveryQuoteId: line.deliveryQuoteId,
               quantity: line.quantity,
               unitPriceAtCheckoutKobo: line.product.priceKobo,
               productAmountKobo: line.productAmountKobo,
@@ -359,34 +380,22 @@ export class OrdersService {
     return release;
   }
 
-  private aggregateItems(
-    items: InitializeOrderInput['items'],
-  ): { productId: string; quantity: number }[] {
-    const quantitiesByProduct = new Map<string, number>();
-
-    for (const item of items) {
-      quantitiesByProduct.set(
-        item.productId,
-        (quantitiesByProduct.get(item.productId) ?? 0) + item.quantity,
-      );
-    }
-
-    return [...quantitiesByProduct.entries()].map(([productId, quantity]) => ({
-      productId,
-      quantity,
-    }));
-  }
-
   private buildCheckoutLines(
-    requestedItems: { productId: string; quantity: number }[],
+    buyerProfileId: string,
+    requestedItems: InitializeOrderInput['items'],
     products: ProductForCheckout[],
+    deliveryQuotes: DeliveryQuoteForCheckout[],
   ): CheckoutLine[] {
     const productsById = new Map(
       products.map((product) => [product.id, product]),
     );
+    const deliveryQuotesById = new Map(
+      deliveryQuotes.map((quote) => [quote.id, quote]),
+    );
 
     return requestedItems.map((item) => {
       const product = productsById.get(item.productId);
+      const deliveryQuote = deliveryQuotesById.get(item.deliveryQuoteId);
 
       if (!product || !this.isProductCheckoutEligible(product)) {
         throw new UnprocessableEntityException(
@@ -400,13 +409,21 @@ export class OrdersService {
         );
       }
 
+      this.assertDeliveryQuoteMatchesCheckout(
+        buyerProfileId,
+        item.productId,
+        product.sellerProfileId,
+        deliveryQuote,
+      );
+
       const productAmountKobo = product.priceKobo * BigInt(item.quantity);
-      const shippingFeeKobo = BigInt(0);
+      const shippingFeeKobo = deliveryQuote.quotedFeeKobo;
       const serviceFeeKobo = this.calculateServiceFee(productAmountKobo);
 
       return {
         product,
         quantity: item.quantity,
+        deliveryQuoteId: deliveryQuote.id,
         productAmountKobo,
         shippingFeeKobo,
         serviceFeeKobo,
@@ -423,6 +440,33 @@ export class OrdersService {
       product.sellerProfile.kycStatus === KycStatus.VERIFIED &&
       product.sellerProfile.status === StoreStatus.ACTIVE
     );
+  }
+
+  private assertDeliveryQuoteMatchesCheckout(
+    buyerProfileId: string,
+    productId: string,
+    sellerProfileId: string,
+    deliveryQuote: DeliveryQuoteForCheckout | undefined,
+  ): asserts deliveryQuote is DeliveryQuoteForCheckout {
+    if (!deliveryQuote) {
+      throw new UnprocessableEntityException(
+        'A valid delivery quote is required for checkout',
+      );
+    }
+
+    if (
+      deliveryQuote.buyerProfileId !== buyerProfileId ||
+      deliveryQuote.productId !== productId ||
+      deliveryQuote.sellerProfileId !== sellerProfileId
+    ) {
+      throw new UnprocessableEntityException(
+        'Delivery quote does not match checkout item',
+      );
+    }
+
+    if (deliveryQuote.expiresAt && deliveryQuote.expiresAt <= new Date()) {
+      throw new UnprocessableEntityException('Delivery quote has expired');
+    }
   }
 
   private calculateServiceFee(productAmountKobo: bigint): bigint {

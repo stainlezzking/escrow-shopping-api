@@ -8,7 +8,7 @@ const providerValues = [PaymentProvider.PAYSTACK] as const;
  * Validates payment initiation requests.
  */
 export const InitiatePaymentSchema = z.object({
-  orderId: z.string().uuid(),
+  orderId: z.uuid(),
   provider: z.enum(providerValues),
 });
 
@@ -16,7 +16,7 @@ export const InitiatePaymentSchema = z.object({
  * Validates payment route parameters.
  */
 export const PaymentParamsSchema = z.object({
-  paymentId: z.string().uuid(),
+  paymentId: z.uuid(),
 });
 
 /**
